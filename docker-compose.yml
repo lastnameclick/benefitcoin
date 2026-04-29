@@ -1,0 +1,22 @@
+# Postgres for metadata. TigerBeetle is run natively (see scripts/tigerbeetle.sh
+# / `make tb`) because containerized TigerBeetle needs a working io_uring, which
+# the macOS podman/libkrun VM does not provide.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cpal
+      POSTGRES_PASSWORD: cpal
+      POSTGRES_DB: cpal
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cpal"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

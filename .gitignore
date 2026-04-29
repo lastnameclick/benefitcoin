@@ -1,0 +1,22 @@
+# Go
+/cpal
+/bin/
+*.test
+*.out
+
+# Env
+.env
+
+# Node / web
+web/node_modules/
+web/dist/
+web/.vite/
+
+# TigerBeetle local binary + data file
+.tigerbeetle/
+*.tigerbeetle
+
+# TS build artifacts (generated)
+*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
