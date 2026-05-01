@@ -1,0 +1,90 @@
+// Package config loads runtime configuration from environment variables.
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"time"
+)
+
+// Config holds all runtime settings for the API server.
+type Config struct {
+	Addr        string // HTTP listen address, e.g. ":8080"
+	DatabaseURL string // Postgres connection string
+	TBAddress   string // TigerBeetle replica address(es), comma-separated
+	TBClusterID uint64 // TigerBeetle cluster id (0 for local dev)
+
+	JWTSecret  string
+	AccessTTL  time.Duration
+	RefreshTTL time.Duration
+
+	CORSOrigin string // allowed SPA origin for browser requests
+
+	// White-label branding — the SaaS operator sets these per deployment. They're
+	// display-only (the internal ledger currency stays "BNC"); the SPA fetches
+	// them from GET /api/v1/config and renders them everywhere.
+	Branding Branding
+}
+
+// Branding is the operator-configurable naming shown throughout the UI.
+type Branding struct {
+	ProductName    string `json:"product_name"`     // in-app name / wordmark, e.g. "BenefitCoins"
+	SiteName       string `json:"site_name"`        // marketing site / browser title
+	CoinName       string `json:"coin_name"`        // singular unit, e.g. "coin"
+	CoinNamePlural string `json:"coin_name_plural"` // plural unit, e.g. "coins"
+	CoinCode       string `json:"coin_code"`        // short ticker shown next to amounts, e.g. "BNC"
+}
+
+// Load reads configuration from the environment, applying dev-friendly defaults.
+func Load() (Config, error) {
+	c := Config{
+		Addr:        env("ADDR", ":8080"),
+		DatabaseURL: env("DATABASE_URL", "postgres://cpal:cpal@localhost:5432/cpal?sslmode=disable"),
+		TBAddress:   env("TB_ADDRESS", "3000"),
+		JWTSecret:   env("JWT_SECRET", "dev-insecure-secret-change-me"),
+		CORSOrigin:  env("CORS_ORIGIN", "http://localhost:5173"),
+		Branding: Branding{
+			ProductName:    env("PRODUCT_NAME", "BenefitCoins"),
+			SiteName:       env("SITE_NAME", "BenefitCoins"),
+			CoinName:       env("COIN_NAME", "coin"),
+			CoinNamePlural: env("COIN_NAME_PLURAL", "coins"),
+			CoinCode:       env("COIN_CODE", "BNC"),
+		},
+	}
+
+	clusterID, err := strconv.ParseUint(env("TB_CLUSTER_ID", "0"), 10, 64)
+	if err != nil {
+		return c, fmt.Errorf("TB_CLUSTER_ID: %w", err)
+	}
+	c.TBClusterID = clusterID
+
+	c.AccessTTL, err = durEnv("ACCESS_TTL", 15*time.Minute)
+	if err != nil {
+		return c, err
+	}
+	c.RefreshTTL, err = durEnv("REFRESH_TTL", 720*time.Hour) // 30 days
+	if err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func durEnv(key string, def time.Duration) (time.Duration, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", key, err)
+	}
+	return d, nil
+}
