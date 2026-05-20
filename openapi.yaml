@@ -1,0 +1,342 @@
+openapi: 3.0.3
+info:
+  title: BenefitCoins Core API
+  version: "1.0.0"
+  description: >
+    A multi-tenant core-banking-style API for tracking fractional "benefit coins".
+    Each household is an isolated tenant with its own accounts and general-ledger.
+    TigerBeetle is the double-entry ledger; Postgres holds metadata. Amounts are
+    minor units (1 coin = 1000 minor units, currency BNC). Customer requests create
+    authorization holds that operators settle (post) or void (reverse).
+servers:
+  - url: http://localhost:8080/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /auth/signup:
+    post:
+      security: []
+      summary: Open a new household and its first operator (self-serve)
+      description: >
+        Provisions a tenant with its own Issuance/Redemption GL accounts and
+        creates the first operator (a parent), returning a token pair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [household_name, display_name, email, password]
+              properties:
+                household_name: { type: string }
+                display_name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 6 }
+      responses:
+        "200":
+          {
+            description: Tokens,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/TokenResponse" } },
+              },
+          }
+        "400": { description: Validation error }
+        "409": { description: Email already registered }
+  /auth/login:
+    post:
+      security: []
+      summary: Exchange credentials for access + refresh tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          {
+            description: Tokens,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/TokenResponse" } },
+              },
+          }
+        "401": { description: Invalid credentials }
+  /auth/refresh:
+    post:
+      security: []
+      summary: Rotate a refresh token for a new token pair
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              {
+                type: object,
+                required: [refresh_token],
+                properties: { refresh_token: { type: string } },
+              }
+      responses:
+        "200":
+          {
+            description: Tokens,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/TokenResponse" } },
+              },
+          }
+        "401": { description: Invalid or expired refresh token }
+  /auth/logout:
+    post:
+      security: []
+      summary: Revoke a refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              {
+                type: object,
+                required: [refresh_token],
+                properties: { refresh_token: { type: string } },
+              }
+      responses:
+        "204": { description: Logged out }
+  /me:
+    get:
+      summary: Current principal
+      responses:
+        "200": { description: Claims }
+  /customers:
+    post:
+      summary: Onboard a customer (operator only). Holders get a deposit account opened.
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, display_name, username, password]
+              properties:
+                type: { type: string, enum: [operator, holder] }
+                display_name: { type: string }
+                username: { type: string }
+                password: { type: string, minLength: 6 }
+      responses:
+        "201": { description: Created customer }
+        "409": { description: Username taken }
+    get:
+      summary: List customers (operator only)
+      responses: { "200": { description: Customers } }
+  /customers/{id}:
+    get:
+      summary: Get a customer with its accounts (operator only)
+      parameters:
+        [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        { "200": { description: Customer }, "404": { description: Not found } }
+  /accounts:
+    get:
+      summary: List accounts (own for holders, all for operators)
+      responses: { "200": { description: Accounts with balances } }
+  /accounts/{id}:
+    get:
+      summary: Get an account with balance
+      parameters:
+        [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        {
+          "200": { description: Account },
+          "403": { description: Forbidden },
+          "404": { description: Not found },
+        }
+  /accounts/{id}/balance:
+    get:
+      summary: Get current / available / awaiting-approval balances
+      parameters:
+        [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        {
+          "200":
+            {
+              description: Balance,
+              content:
+                {
+                  application/json:
+                    { schema: { $ref: "#/components/schemas/Balance" } },
+                },
+            },
+        }
+  /accounts/{id}/transactions:
+    get:
+      summary: Mini-statement (transaction history) for an account
+      parameters:
+        [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Transactions } }
+  /accounts/{id}/earnings:
+    post:
+      summary: Holder reports a completed task → earn hold
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              {
+                type: object,
+                required: [task_id],
+                properties: { task_id: { type: string } },
+              }
+      responses:
+        "201": { description: Pending transaction }
+        "400": { description: Task inactive }
+  /accounts/{id}/redemptions:
+    post:
+      summary: Holder requests a 1-coin reward → redeem hold
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "201": { description: Pending transaction }
+        "409": { description: Insufficient funds }
+  /accounts/{id}/adjustments:
+    post:
+      summary: Operator manual adjustment — add or subtract coins with metadata
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [direction, amount]
+              properties:
+                direction:
+                  {
+                    type: string,
+                    enum: [credit, debit],
+                    description: "credit = add, debit = subtract",
+                  }
+                amount:
+                  { type: string, description: 'coin amount, e.g. "0.50"' }
+                reason:
+                  { type: string, description: "why the adjustment was made" }
+                occurred_at:
+                  {
+                    type: string,
+                    description: "when it occurred (YYYY-MM-DD or RFC3339)",
+                  }
+                details:
+                  { type: object, description: "free-form additional detail" }
+      responses:
+        "201": { description: Posted (settled) adjustment transaction }
+        "400": { description: Bad request (e.g. not a customer account) }
+        "409": { description: Insufficient funds for a debit }
+  /tasks:
+    get:
+      summary: List tasks (holders see active only)
+      responses: { "200": { description: Tasks } }
+    post:
+      summary: Create a task (operator only)
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, value]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                value: { type: string, description: 'coin amount, e.g. "0.15"' }
+      responses: { "201": { description: Created task } }
+  /tasks/{id}:
+    patch:
+      summary: Update a task (operator only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses: { "200": { description: Updated task } }
+  /transactions:
+    get:
+      summary: List/work-queue transactions (operator only)
+      parameters:
+        - {
+            name: status,
+            in: query,
+            schema: { type: string, enum: [pending, settled, voided] },
+          }
+        - { name: account_id, in: query, schema: { type: string } }
+      responses: { "200": { description: Transactions } }
+  /transactions/{id}/settle:
+    post:
+      summary: Settle (post) a pending hold (operator only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        {
+          "200": { description: Settled transaction },
+          "409": { description: Already decided },
+        }
+  /transactions/{id}/void:
+    post:
+      summary: Void (reverse) a pending hold (operator only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        {
+          "200": { description: Voided transaction },
+          "409": { description: Already decided },
+        }
+  /audit:
+    get:
+      summary: Append-only audit log (operator only)
+      responses: { "200": { description: Audit events } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string }
+      description: Required on all mutating requests; replaying the same key returns the stored response.
+  schemas:
+    TokenResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        expires_at: { type: string, format: date-time }
+        refresh_token: { type: string }
+        role: { type: string, enum: [operator, holder] }
+        customer_id: { type: string }
+        tenant_id: { type: string }
+        household: { type: string }
+        username: { type: string }
+    Balance:
+      type: object
+      properties:
+        current_minor: { type: integer }
+        available_minor: { type: integer }
+        awaiting_approval_minor: { type: integer }
+        current: { type: string }
+        available: { type: string }
+        awaiting_approval: { type: string }
+        currency: { type: string }
