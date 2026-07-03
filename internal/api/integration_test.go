@@ -60,6 +60,26 @@ func (c *apiClient) do(method, path, token string, body any, idemKey string) (in
 	return resp.StatusCode, out
 }
 
+// doRaw is like do but returns the undecoded response — needed for binary
+// (PDF) responses that aren't JSON.
+func (c *apiClient) doRaw(method, path, token string) (int, http.Header, []byte) {
+	c.t.Helper()
+	req, err := http.NewRequest(method, c.base+path, nil)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, resp.Header, raw
+}
+
 func login(c *apiClient, user, pass string) string {
 	st, body := c.do(http.MethodPost, "/api/v1/auth/login", "", map[string]string{"username": user, "password": pass}, "")
 	if st != 200 {
@@ -285,6 +305,79 @@ func TestEndToEnd(t *testing.T) {
 	// A holder must not settle (operator-only).
 	if stF, _ := c.do(http.MethodPost, "/api/v1/transactions/"+earnTxID+"/settle", kidTok, nil, idem("kid-settle")); stF != http.StatusForbidden {
 		t.Fatalf("expected 403 for holder settle, got %d", stF)
+	}
+
+	// Charts: the kid's own balance-history, earn/redeem, and leaderboard
+	// endpoints all resolve against the settled activity above.
+	if stC, cbody := c.do(http.MethodGet, "/api/v1/accounts/"+acctID+"/charts/balance-history", kidTok, nil, ""); stC != 200 {
+		t.Fatalf("balance-history: %d %v", stC, cbody)
+	} else if pts, ok := cbody["points"].([]any); !ok || len(pts) == 0 {
+		t.Fatalf("balance-history: expected at least one point, got %v", cbody["points"])
+	}
+	if stC, cbody := c.do(http.MethodGet, "/api/v1/accounts/"+acctID+"/charts/earn-redeem", kidTok, nil, ""); stC != 200 {
+		t.Fatalf("earn-redeem: %d %v", stC, cbody)
+	}
+	if stC, cbody := c.do(http.MethodGet, "/api/v1/accounts/"+acctID+"/charts/redemption-frequency", kidTok, nil, ""); stC != 200 {
+		t.Fatalf("redemption-frequency: %d %v", stC, cbody)
+	} else if cbody["by_hour"] == nil || cbody["by_weekday"] == nil || cbody["by_month"] == nil {
+		t.Fatalf("redemption-frequency: missing breakdowns: %v", cbody)
+	}
+	if stC, cbody := c.do(http.MethodGet, "/api/v1/accounts/"+acctID+"/charts/task-leaderboard", kidTok, nil, ""); stC != 200 {
+		t.Fatalf("task-leaderboard: %d %v", stC, cbody)
+	} else if entries, ok := cbody["entries"].([]any); !ok || len(entries) == 0 {
+		t.Fatalf("task-leaderboard: expected earned tasks to appear, got %v", cbody["entries"])
+	}
+
+	// Operator-only tenant-wide views: a holder is forbidden, the operator sees data.
+	if stF, _ := c.do(http.MethodGet, "/api/v1/tenant/charts/household-overview", kidTok, nil, ""); stF != http.StatusForbidden {
+		t.Fatalf("expected 403 for holder household-overview, got %d", stF)
+	}
+	if stH, hbody := c.do(http.MethodGet, "/api/v1/tenant/charts/household-overview", opTok, nil, ""); stH != 200 {
+		t.Fatalf("household-overview: %d %v", stH, hbody)
+	} else if holders, ok := hbody["holders"].([]any); !ok || len(holders) != 1 {
+		t.Fatalf("household-overview: expected 1 holder, got %v", hbody["holders"])
+	}
+
+	// Statement PDF: on-demand download returns a real PDF but is a one-off
+	// preview/reprint — it must NOT be saved to the Inbox (repeatedly clicking
+	// "generate" for the same month shouldn't pile up duplicate Inbox entries).
+	stP, hdr, pdfBytes := c.doRaw(http.MethodGet, "/api/v1/accounts/"+acctID+"/statement.pdf", kidTok)
+	if stP != 200 {
+		t.Fatalf("statement.pdf: %d", stP)
+	}
+	if ct := hdr.Get("Content-Type"); ct != "application/pdf" {
+		t.Fatalf("statement.pdf: expected application/pdf, got %q", ct)
+	}
+	if !bytes.HasPrefix(pdfBytes, []byte("%PDF")) {
+		t.Fatalf("statement.pdf: response does not look like a PDF (first bytes: %q)", pdfBytes[:min(16, len(pdfBytes))])
+	}
+	stI0, ibody0 := c.do(http.MethodGet, "/api/v1/accounts/"+acctID+"/inbox", kidTok, nil, "")
+	if stI0 != 200 {
+		t.Fatalf("inbox: %d %v", stI0, ibody0)
+	}
+	if statements, _ := ibody0["statements"].([]any); len(statements) != 0 {
+		t.Fatalf("inbox: on-demand download must not be saved, got %v", statements)
+	}
+
+	// Inbox is populated only by the monthly job (simulated here via a direct
+	// store write, since that binary isn't exercised by this HTTP test).
+	// Listed and re-downloadable statements should reflect that seeded row.
+	tenantID := suBody["tenant_id"].(string)
+	if _, err := st.SaveStatement(context.Background(), tenantID, acctID, time.Now().UTC().AddDate(0, -1, 0), pdfBytes); err != nil {
+		t.Fatalf("seed statement: %v", err)
+	}
+	stI, ibody := c.do(http.MethodGet, "/api/v1/accounts/"+acctID+"/inbox", kidTok, nil, "")
+	if stI != 200 {
+		t.Fatalf("inbox: %d %v", stI, ibody)
+	}
+	statements, _ := ibody["statements"].([]any)
+	if len(statements) != 1 {
+		t.Fatalf("inbox: expected 1 statement, got %v", statements)
+	}
+	stmtID := statements[0].(map[string]any)["id"].(string)
+	stD, dhdr, dpdf := c.doRaw(http.MethodGet, "/api/v1/accounts/"+acctID+"/inbox/"+stmtID+"/pdf", kidTok)
+	if stD != 200 || dhdr.Get("Content-Type") != "application/pdf" || !bytes.HasPrefix(dpdf, []byte("%PDF")) {
+		t.Fatalf("inbox download: status=%d content-type=%q", stD, dhdr.Get("Content-Type"))
 	}
 
 	// --- Chore proposals: a kid can request coins for something not on the catalog. ---

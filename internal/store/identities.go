@@ -32,6 +32,28 @@ func (s *Store) GetIdentity(ctx context.Context, id string) (domain.Identity, er
 		FROM identities WHERE id=$1`, id)
 }
 
+// ListIdentitiesByRole returns every identity in a tenant with the given role
+// (e.g. every operator/parent in a household) — used to resolve who a
+// household's statement emails should go to.
+func (s *Store) ListIdentitiesByRole(ctx context.Context, tenantID string, role domain.Role) ([]domain.Identity, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, customer_id, username, password_hash, role, created_at
+		FROM identities WHERE tenant_id=$1 AND role=$2`, tenantID, role)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Identity
+	for rows.Next() {
+		var i domain.Identity
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.CustomerID, &i.Username, &i.PasswordHash, &i.Role, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) scanIdentity(ctx context.Context, query string, arg any) (domain.Identity, error) {
 	var i domain.Identity
 	err := s.pool.QueryRow(ctx, query, arg).Scan(

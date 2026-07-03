@@ -92,6 +92,29 @@ func (s *Store) ListTransactions(ctx context.Context, tenantID, status, accountI
 	return out, rows.Err()
 }
 
+// ListTransactionsInRange returns an account's settled transactions whose
+// value date falls in [from, to), oldest first — the statement's line items.
+func (s *Store) ListTransactionsInRange(ctx context.Context, tenantID, accountID string, from, to time.Time) ([]domain.Transaction, error) {
+	rows, err := s.pool.Query(ctx, txSelect+`
+		WHERE tenant_id=$1 AND account_id=$2 AND status='settled'
+		  AND COALESCE(effective_at, created_at) >= $3 AND COALESCE(effective_at, created_at) < $4
+		ORDER BY COALESCE(effective_at, created_at)`,
+		tenantID, accountID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Transaction
+	for rows.Next() {
+		t, err := scanTxRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 const txSelect = `
 	SELECT id, tenant_id, type, status, account_id, gl_account_id, amount_minor, task_id, memo,
 	       tb_pending_transfer_id, tb_post_transfer_id, effective_at, details,

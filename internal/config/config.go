@@ -25,7 +25,24 @@ type Config struct {
 	// display-only (the internal ledger currency stays "BNC"); the SPA fetches
 	// them from GET /api/v1/config and renders them everywhere.
 	Branding Branding
+
+	// SMTP is optional: emailing monthly statements is a best-effort enhancement
+	// on top of the in-app Inbox, which always works with zero mail setup. An
+	// empty Host means "not configured" — the statement job just skips sending.
+	SMTP SMTPConfig
 }
+
+// SMTPConfig holds outbound mail settings for monthly statement emails.
+type SMTPConfig struct {
+	Host        string
+	Port        int
+	Username    string
+	Password    string
+	FromAddress string
+}
+
+// Configured reports whether SMTP has been set up for this deployment.
+func (c SMTPConfig) Configured() bool { return c.Host != "" }
 
 // Branding is the operator-configurable naming shown throughout the UI.
 type Branding struct {
@@ -66,6 +83,20 @@ func Load() (Config, error) {
 	c.RefreshTTL, err = durEnv("REFRESH_TTL", 720*time.Hour) // 30 days
 	if err != nil {
 		return c, err
+	}
+
+	c.SMTP = SMTPConfig{
+		Host:        env("SMTP_HOST", ""),
+		Username:    env("SMTP_USERNAME", ""),
+		Password:    env("SMTP_PASSWORD", ""),
+		FromAddress: env("SMTP_FROM", "statements@localhost"),
+	}
+	if c.SMTP.Host != "" {
+		port, err := strconv.Atoi(env("SMTP_PORT", "587"))
+		if err != nil {
+			return c, fmt.Errorf("SMTP_PORT: %w", err)
+		}
+		c.SMTP.Port = port
 	}
 	return c, nil
 }

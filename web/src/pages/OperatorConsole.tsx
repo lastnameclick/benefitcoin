@@ -17,6 +17,7 @@ import {
   type Transaction,
 } from "../api";
 import { useBranding } from "../branding";
+import { AccountCharts, HouseholdCharts, Inbox } from "../components/charts";
 import { DashboardShell, type Section } from "../components/DashboardShell";
 import {
   BalanceTiles,
@@ -31,7 +32,7 @@ import {
   IconActivity,
   IconAdjust,
   IconArrowRight,
-  IconBook,
+  IconChart,
   IconCheck,
   IconHome,
   IconInbox,
@@ -92,6 +93,13 @@ export default function OperatorConsole() {
       icon: <IconActivity />,
       hint: "All postings across the household",
       render: () => <Activity nameFor={nameFor} />,
+    },
+    {
+      key: "charts",
+      label: "Charts",
+      icon: <IconChart />,
+      hint: "Household-wide trends and comparisons",
+      render: () => <HouseholdCharts />,
     },
     {
       key: "adjust",
@@ -526,6 +534,12 @@ function AccountDetail({
       >
         <TransactionsPanel txs={txs} accountNameFor={() => account.name} />
       </Panel>
+      <div className="span-2">
+        <Inbox accountId={account.id} />
+      </div>
+      <div className="span-2">
+        <AccountCharts accountId={account.id} />
+      </div>
     </div>
   );
 }

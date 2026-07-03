@@ -1,4 +1,4 @@
-.PHONY: tb pg up down logs api web build test test-integration tidy reset fmt
+.PHONY: tb pg up down logs api web build statement-job seed test test-integration tidy reset fmt
 
 # Container engine for Postgres. Override with `make COMPOSE="docker compose"`.
 COMPOSE ?= podman compose
@@ -43,6 +43,20 @@ build:
 
 web:
 	cd web && npm run dev
+
+# Generate + save (and, if SMTP_HOST is set, email) last month's statement for
+# every holder. Meant to be invoked by an external scheduler (cron / Windows
+# Task Scheduler / your host's scheduled-job feature), not run continuously —
+# there is no built-in ticker. Needs `make pg` + `make tb`.
+statement-job:
+	go run ./cmd/statement-job
+
+# Create a demo household with ~6 months of backdated chore/redemption history
+# — enough data for every chart and the monthly statement to have something to
+# show. Prints login credentials. Each run adds a fresh household; `make reset`
+# wipes everything if you want to start over. Needs `make pg` + `make tb`.
+seed:
+	go run ./cmd/seed
 
 # --- tests ---------------------------------------------------------------
 
