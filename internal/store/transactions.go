@@ -46,6 +46,24 @@ func (s *Store) DecideTransaction(ctx context.Context, tenantID, id string, stat
 	return nil
 }
 
+// AdjustTransactionAmount changes the amount and backing ledger hold of a
+// still-pending transaction (an operator revising a proposed reward before
+// deciding it). Returns ErrNotFound if it's missing or no longer pending.
+func (s *Store) AdjustTransactionAmount(ctx context.Context, tenantID, id string, amountMinor int64, pendingTransferID string) error {
+	ct, err := s.pool.Exec(ctx, `
+		UPDATE transactions
+		SET amount_minor=$3, tb_pending_transfer_id=$4
+		WHERE id=$1 AND tenant_id=$2 AND status='pending'`,
+		id, tenantID, amountMinor, pendingTransferID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) GetTransaction(ctx context.Context, tenantID, id string) (domain.Transaction, error) {
 	return s.scanTx(ctx, txSelect+` WHERE id=$1 AND tenant_id=$2`, id, tenantID)
 }

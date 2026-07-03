@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   api,
   ApiError,
@@ -24,6 +29,7 @@ import {
   IconCheck,
   IconHome,
   IconList,
+  IconZap,
 } from "../components/icons";
 
 export default function HolderPortal() {
@@ -32,6 +38,8 @@ export default function HolderPortal() {
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+
+  const bountyCount = tasks.filter((t) => t.is_bounty && t.active && !t.claimed_by).length;
 
   const load = useCallback(async () => {
     const [{ accounts }, { tasks }] = await Promise.all([
@@ -111,6 +119,10 @@ export default function HolderPortal() {
       key: "earn",
       label: "Ways to earn",
       icon: <IconList />,
+      badge: bountyCount || undefined,
+      hint: bountyCount
+        ? `${bountyCount} limited-time ${bountyCount > 1 ? "bounties" : "bounty"} up for grabs`
+        : undefined,
       render: () => (
         <Earn
           tasks={tasks}
@@ -121,6 +133,12 @@ export default function HolderPortal() {
             act(
               () => api.submitEarning(account!.id, t.id),
               `Sent "${t.name}" for approval.`,
+            )
+          }
+          onPropose={(description, value) =>
+            act(
+              () => api.proposeChore(account!.id, description, value),
+              "Sent your chore for approval.",
             )
           }
         />
@@ -227,51 +245,141 @@ function Earn({
   tasks,
   disabled,
   onDone,
+  onPropose,
   msg,
   err,
 }: {
   tasks: Task[];
   disabled: boolean;
   onDone: (t: Task) => void;
+  onPropose: (description: string, value: string) => void;
   msg: string;
   err: string;
 }) {
-  const active = tasks.filter((t) => t.active);
+  const active = tasks.filter((t) => t.active && !t.is_bounty);
+  const bounties = tasks.filter((t) => t.is_bounty && t.active && !t.claimed_by);
+
+  return (
+    <div className="grid-2">
+      {bounties.length > 0 && (
+        <Panel className="span-2 bounty-panel" title="Limited-time bounties">
+          <ul className="rows">
+            {bounties.map((t) => (
+              <li key={t.id} className="row">
+                <div>
+                  <div className="row-title">
+                    <IconZap width={15} height={15} className="bounty-icon" /> {t.name}{" "}
+                    <span className="chip chip-bounty">one-time bounty</span>
+                  </div>
+                  {t.description && (
+                    <div className="row-sub">{t.description}</div>
+                  )}
+                </div>
+                <div className="row-right">
+                  <Money minor={t.value_minor} signed className="pos" />
+                  <button
+                    className="btn-primary"
+                    disabled={disabled}
+                    onClick={() => onDone(t)}
+                  >
+                    <IconCheck width={16} height={16} /> Claim it
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+
+      <Panel
+        className="span-2"
+        title="Ways to earn"
+        sub="Mark a chore done to submit it for approval."
+      >
+        <Notice msg={msg} err={err} />
+        {active.length === 0 ? (
+          <Empty
+            title="Nothing to earn yet."
+            hint="A parent hasn't posted any chores."
+          />
+        ) : (
+          <ul className="rows">
+            {active.map((t) => (
+              <li key={t.id} className="row">
+                <div>
+                  <div className="row-title">{t.name}</div>
+                  {t.description && (
+                    <div className="row-sub">{t.description}</div>
+                  )}
+                </div>
+                <div className="row-right">
+                  <Money minor={t.value_minor} signed className="pos" />
+                  <button
+                    className="btn-ghost"
+                    disabled={disabled}
+                    onClick={() => onDone(t)}
+                  >
+                    <IconCheck width={16} height={16} /> Mark done
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+
+      <ProposeChore disabled={disabled} onPropose={onPropose} />
+    </div>
+  );
+}
+
+function ProposeChore({
+  disabled,
+  onPropose,
+}: {
+  disabled: boolean;
+  onPropose: (description: string, value: string) => void;
+}) {
+  const b = useBranding();
+  const [description, setDescription] = useState("");
+  const [value, setValue] = useState("");
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    onPropose(description, value);
+    setDescription("");
+    setValue("");
+  };
+
   return (
     <Panel
-      title="Ways to earn"
-      sub="Mark a chore done to submit it for approval."
+      className="span-2"
+      title="Did something that's not on the list?"
+      sub="Describe it and propose what it's worth. A parent can approve, decline, or change the amount."
     >
-      <Notice msg={msg} err={err} />
-      {active.length === 0 ? (
-        <Empty
-          title="Nothing to earn yet."
-          hint="A parent hasn't posted any chores."
-        />
-      ) : (
-        <ul className="rows">
-          {active.map((t) => (
-            <li key={t.id} className="row">
-              <div>
-                <div className="row-title">{t.name}</div>
-                {t.description && (
-                  <div className="row-sub">{t.description}</div>
-                )}
-              </div>
-              <div className="row-right">
-                <Money minor={t.value_minor} signed className="pos" />
-                <button
-                  className="btn-ghost"
-                  disabled={disabled}
-                  onClick={() => onDone(t)}
-                >
-                  <IconCheck width={16} height={16} /> Mark done
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <form onSubmit={submit} className="form">
+        <label className="field">
+          What did you do?
+          <input
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Organized the garage"
+            required
+          />
+        </label>
+        <label className="field">
+          Proposed reward ({b.coin_name_plural}, e.g. 0.25)
+          <input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="0.25"
+            required
+          />
+        </label>
+        <button className="btn-primary" disabled={disabled}>
+          Send for approval
+        </button>
+      </form>
     </Panel>
   );
 }

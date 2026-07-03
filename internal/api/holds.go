@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"cpal/internal/auth"
 	"cpal/internal/domain"
@@ -20,6 +21,8 @@ type earningRequest struct {
 
 // handleCreateEarning lets a holder report a completed task, placing an
 // authorization hold that mints the task's value once an operator settles it.
+// If the task is a one-time bounty, this also claims it — the first holder to
+// submit wins, and it disappears from the catalog for everyone else.
 func (s *Server) handleCreateEarning(w http.ResponseWriter, r *http.Request) {
 	actor, _ := auth.FromContext(r.Context())
 	acct, ok := s.loadAccountAuthorized(w, r)
@@ -46,6 +49,15 @@ func (s *Server) handleCreateEarning(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "task_inactive", "that task is no longer available")
 		return
 	}
+	if task.IsBounty {
+		if err := s.store.ClaimBounty(r.Context(), actor.TenantID, task.ID, actor.CustomerID); err == store.ErrConflict {
+			writeErr(w, http.StatusConflict, "bounty_claimed", "someone already claimed this bounty")
+			return
+		} else if err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal", "failed to claim bounty")
+			return
+		}
+	}
 
 	pendingID, err := s.ledger.EarnHold(tenant.IssuanceTBID, acct.TBAccountID, task.ValueMinor)
 	if err != nil {
@@ -62,9 +74,131 @@ func (s *Server) handleCreateEarning(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "internal", "failed to record transaction")
 		return
 	}
-	s.audit(r.Context(), actor.IdentityID, "earning.request", "transaction", tx.ID,
+	action := "earning.request"
+	if task.IsBounty {
+		action = "bounty.claim"
+	}
+	s.audit(r.Context(), actor.IdentityID, action, "transaction", tx.ID,
 		map[string]any{"account_id": acct.ID, "task_id": task.ID, "amount_minor": task.ValueMinor})
 	writeJSON(w, http.StatusCreated, tx)
+}
+
+type proposeChoreRequest struct {
+	Description string `json:"description"`
+	Value       string `json:"value"` // proposed coin amount, e.g. "0.25"
+}
+
+// handleProposeChore lets a holder submit a chore that isn't on the catalog —
+// a free-text description and a proposed reward — as an authorization hold
+// awaiting an operator's decision, same as a catalog earning.
+func (s *Server) handleProposeChore(w http.ResponseWriter, r *http.Request) {
+	actor, _ := auth.FromContext(r.Context())
+	acct, ok := s.loadAccountAuthorized(w, r)
+	if !ok {
+		return
+	}
+	tenant, ok := s.loadTenant(w, r)
+	if !ok {
+		return
+	}
+	var req proposeChoreRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	desc := strings.TrimSpace(req.Description)
+	if desc == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "description is required")
+		return
+	}
+	valueMinor, err := money.ParseCoins(req.Value)
+	if err != nil || valueMinor <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "value must be a positive coin amount, e.g. \"0.25\"")
+		return
+	}
+
+	pendingID, err := s.ledger.EarnHold(tenant.IssuanceTBID, acct.TBAccountID, valueMinor)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ledger_error", "failed to place earn hold: "+err.Error())
+		return
+	}
+	tx := &domain.Transaction{
+		ID: uuid.NewString(), TenantID: actor.TenantID, Type: domain.TxEarn, Status: domain.TxPending,
+		AccountID: acct.ID, GLAccountID: tenant.IssuanceAccountID, AmountMinor: valueMinor,
+		Memo: desc, TBPendingTransferID: pendingID, CreatedBy: actor.IdentityID,
+		Details: map[string]any{"proposed_minor": valueMinor, "custom": true},
+	}
+	if err := s.store.CreateTransaction(r.Context(), tx); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "failed to record transaction")
+		return
+	}
+	s.audit(r.Context(), actor.IdentityID, "chore_proposal.create", "transaction", tx.ID,
+		map[string]any{"account_id": acct.ID, "amount_minor": valueMinor, "description": desc})
+	writeJSON(w, http.StatusCreated, tx)
+}
+
+type adjustTransactionRequest struct {
+	Amount string `json:"amount"` // new coin amount, e.g. "0.30"
+}
+
+// handleAdjustTransaction lets an operator revise the reward on a pending earn
+// request (typically a proposed chore) before approving it. The original hold
+// is voided and replaced with a new one at the adjusted amount.
+func (s *Server) handleAdjustTransaction(w http.ResponseWriter, r *http.Request) {
+	actor, _ := auth.FromContext(r.Context())
+	id := chi.URLParam(r, "id")
+	tx, err := s.store.GetTransaction(r.Context(), actor.TenantID, id)
+	if err == store.ErrNotFound {
+		writeErr(w, http.StatusNotFound, "not_found", "transaction not found")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "failed to load transaction")
+		return
+	}
+	if tx.Status != domain.TxPending {
+		writeErr(w, http.StatusConflict, "already_decided", "transaction is already "+string(tx.Status))
+		return
+	}
+	if tx.Type != domain.TxEarn {
+		writeErr(w, http.StatusBadRequest, "bad_request", "only earn requests can be adjusted")
+		return
+	}
+	var req adjustTransactionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	amountMinor, err := money.ParseCoins(req.Amount)
+	if err != nil || amountMinor <= 0 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "amount must be a positive coin amount, e.g. \"0.30\"")
+		return
+	}
+
+	acct, err := s.store.GetAccount(r.Context(), actor.TenantID, tx.AccountID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "failed to load account")
+		return
+	}
+	tenant, ok := s.loadTenant(w, r)
+	if !ok {
+		return
+	}
+	if _, err := s.ledger.Void(tx.TBPendingTransferID, tx.Type); err != nil {
+		writeErr(w, http.StatusInternalServerError, "ledger_error", "failed to release the prior hold: "+err.Error())
+		return
+	}
+	newPendingID, err := s.ledger.EarnHold(tenant.IssuanceTBID, acct.TBAccountID, amountMinor)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "ledger_error", "failed to place adjusted hold: "+err.Error())
+		return
+	}
+	if err := s.store.AdjustTransactionAmount(r.Context(), actor.TenantID, tx.ID, amountMinor, newPendingID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "failed to record adjustment")
+		return
+	}
+	s.audit(r.Context(), actor.IdentityID, "transaction.adjust", "transaction", tx.ID,
+		map[string]any{"from_amount_minor": tx.AmountMinor, "to_amount_minor": amountMinor})
+
+	updated, _ := s.store.GetTransaction(r.Context(), actor.TenantID, tx.ID)
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // handleCreateRedemption lets a holder request to spend one whole coin on a
@@ -154,6 +288,12 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, settle bool) {
 	if err := s.store.DecideTransaction(r.Context(), actor.TenantID, tx.ID, nextSts, &postID, actor.IdentityID, nowUTC()); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "failed to record decision")
 		return
+	}
+	// Declining a bounty claim reopens it for any holder to claim again.
+	if !settle && tx.Type == domain.TxEarn && tx.TaskID != nil {
+		if task, err := s.store.GetTask(r.Context(), actor.TenantID, *tx.TaskID); err == nil && task.IsBounty {
+			_ = s.store.ReleaseBountyClaim(r.Context(), actor.TenantID, task.ID)
+		}
 	}
 	s.audit(r.Context(), actor.IdentityID, action, "transaction", tx.ID,
 		map[string]any{"amount_minor": tx.AmountMinor, "type": tx.Type})

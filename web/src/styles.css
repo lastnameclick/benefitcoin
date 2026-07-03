@@ -352,6 +352,13 @@ button.danger:hover { background: var(--debit); color: var(--sheet); }
 .pill-voided { color: #8f2a20; background: #fbe9e7; border-color: #f2cfca; }
 .chip { font-size: 0.72rem; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; color: #495260; }
 .chip-off { color: var(--muted); }
+.chip-bounty { color: var(--warn); background: #fdf6e3; border-color: #f0e2bd; }
+
+/* --- bounties --- */
+.bounty-panel { border-color: #f0e2bd; background: #fffcf5; }
+.bounty-icon { color: var(--warn); flex: 0 0 auto; }
+.adjust-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.adjust-input { width: 100px; padding: 6px 10px !important; font-size: 0.86rem !important; }
 
 /* --- buttons --- */
 .app .btn-primary, .app .btn-ghost, .app .btn-danger {

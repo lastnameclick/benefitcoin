@@ -8,6 +8,7 @@ import {
 import {
   api,
   ApiError,
+  coins,
   isCredit,
   type Account,
   type AuditEvent,
@@ -38,6 +39,7 @@ import {
   IconShield,
   IconUsers,
   IconX,
+  IconZap,
 } from "../components/icons";
 
 export default function OperatorConsole() {
@@ -233,7 +235,7 @@ function Approvals({
   return (
     <Panel
       title="Pending approvals"
-      sub="Each item is an authorization hold — approve to settle it, or decline to void it."
+      sub="Each item is an authorization hold — approve to settle it, decline to void it, or adjust the reward first."
     >
       <Notice err={err} />
       {pending.length === 0 ? (
@@ -244,38 +246,91 @@ function Approvals({
       ) : (
         <ul className="rows">
           {pending.map((t) => (
-            <li key={t.id} className="row">
-              <div>
-                <div className="row-title">{nameFor(t.account_id)}</div>
-                <div className="row-sub">
-                  {t.type === "earn" ? "Chore" : "Reward"} · {t.memo} ·{" "}
-                  {new Date(t.created_at).toLocaleDateString()}
-                </div>
-              </div>
-              <div className="row-right">
-                <Money
-                  minor={t.amount_minor}
-                  signed
-                  className={isCredit(t) ? "pos" : "neg"}
-                />
-                <button
-                  className="btn-primary sm"
-                  onClick={() => decide(() => api.settle(t.id))}
-                >
-                  <IconCheck width={15} height={15} /> Approve
-                </button>
-                <button
-                  className="btn-danger sm"
-                  onClick={() => decide(() => api.void(t.id))}
-                >
-                  <IconX width={15} height={15} /> Decline
-                </button>
-              </div>
-            </li>
+            <ApprovalRow
+              key={t.id}
+              t={t}
+              nameFor={nameFor}
+              onSettle={() => decide(() => api.settle(t.id))}
+              onVoid={() => decide(() => api.void(t.id))}
+              onAdjust={(amount) => decide(() => api.adjustReward(t.id, amount))}
+            />
           ))}
         </ul>
       )}
     </Panel>
+  );
+}
+
+function ApprovalRow({
+  t,
+  nameFor,
+  onSettle,
+  onVoid,
+  onAdjust,
+}: {
+  t: Transaction;
+  nameFor: (id: string) => string;
+  onSettle: () => void;
+  onVoid: () => void;
+  onAdjust: (amount: string) => void;
+}) {
+  const isCustomChore = t.type === "earn" && !t.task_id;
+  const [adjusting, setAdjusting] = useState(false);
+  const [amount, setAmount] = useState(coins(t.amount_minor));
+
+  return (
+    <li className="row">
+      <div>
+        <div className="row-title">
+          {nameFor(t.account_id)}{" "}
+          {isCustomChore && <span className="chip chip-bounty">proposed chore</span>}
+        </div>
+        <div className="row-sub">
+          {t.type === "earn" ? "Chore" : "Reward"} · {t.memo} ·{" "}
+          {new Date(t.created_at).toLocaleDateString()}
+        </div>
+        {adjusting && (
+          <div className="hint-line adjust-row">
+            <input
+              className="adjust-input"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.25"
+            />
+            <button
+              className="btn-primary sm"
+              onClick={() => {
+                onAdjust(amount);
+                setAdjusting(false);
+              }}
+            >
+              Save
+            </button>
+            <button className="btn-ghost sm" onClick={() => setAdjusting(false)}>
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="row-right">
+        <Money
+          minor={t.amount_minor}
+          signed
+          className={isCredit(t) ? "pos" : "neg"}
+        />
+        {t.type === "earn" && !adjusting && (
+          <button className="btn-ghost sm" onClick={() => setAdjusting(true)}>
+            <IconAdjust width={15} height={15} /> Adjust
+          </button>
+        )}
+        <button className="btn-primary sm" onClick={onSettle}>
+          <IconCheck width={15} height={15} /> Approve
+        </button>
+        <button className="btn-danger sm" onClick={onVoid}>
+          <IconX width={15} height={15} /> Decline
+        </button>
+      </div>
+    </li>
   );
 }
 
@@ -661,6 +716,9 @@ function Chores() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const { err, run } = useError();
   const [form, setForm] = useState({ name: "", description: "", value: "" });
+  const [bountyErr, setBountyErr] = useState("");
+  const [bountyMsg, setBountyMsg] = useState("");
+  const [bountyForm, setBountyForm] = useState({ name: "", description: "", value: "" });
 
   const load = useCallback(async () => {
     const { tasks } = await api.listTasks();
@@ -681,14 +739,29 @@ function Chores() {
     );
   };
 
+  const submitBounty = async (e: FormEvent) => {
+    e.preventDefault();
+    setBountyErr("");
+    setBountyMsg("");
+    try {
+      await api.createTask(bountyForm.name, bountyForm.description, bountyForm.value, true);
+      setBountyMsg(`Posted "${bountyForm.name}" — every kid will see it until one claims it.`);
+      setBountyForm({ name: "", description: "", value: "" });
+      load();
+    } catch (e) {
+      setBountyErr(e instanceof ApiError ? e.message : String(e));
+    }
+  };
+
   return (
     <div className="grid-2">
       <Panel
+        className="span-2"
         title="Chore catalog"
         sub="What holders can earn. Retire a chore to hide it without deleting history."
       >
         {tasks.length === 0 ? (
-          <Empty title="No chores yet." hint="Add one on the right." />
+          <Empty title="No chores yet." hint="Add one below." />
         ) : (
           <ul className="rows">
             {tasks.map((t) => (
@@ -696,6 +769,11 @@ function Chores() {
                 <div>
                   <div className="row-title">
                     {t.name}{" "}
+                    {t.is_bounty && (
+                      <span className="chip chip-bounty">
+                        {t.claimed_by ? "bounty · claimed" : "bounty · open"}
+                      </span>
+                    )}
                     {!t.active && (
                       <span className="chip chip-off">retired</span>
                     )}
@@ -753,6 +831,40 @@ function Chores() {
           </label>
           <Notice err={err} />
           <button className="btn-primary">Add chore</button>
+        </form>
+      </Panel>
+      <Panel
+        title="Post a bounty"
+        sub="A one-time opportunity — every kid sees it, first to claim it wins."
+      >
+        <form onSubmit={submitBounty} className="form">
+          <label className="field">
+            Name
+            <input
+              value={bountyForm.name}
+              onChange={(e) => setBountyForm({ ...bountyForm, name: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            Description
+            <input
+              value={bountyForm.description}
+              onChange={(e) =>
+                setBountyForm({ ...bountyForm, description: e.target.value })
+              }
+            />
+          </label>
+          <label className="field">
+            Value ({b.coin_name_plural}, e.g. 1.00)
+            <input
+              value={bountyForm.value}
+              onChange={(e) => setBountyForm({ ...bountyForm, value: e.target.value })}
+            />
+          </label>
+          <Notice msg={bountyMsg} err={bountyErr} />
+          <button className="btn-primary">
+            <IconZap width={16} height={16} /> Post bounty
+          </button>
         </form>
       </Panel>
     </div>

@@ -76,6 +76,7 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/accounts/{id}/balance", s.handleGetBalance)
 			r.Get("/accounts/{id}/transactions", s.handleAccountTransactions)
 			r.Post("/accounts/{id}/earnings", s.handleCreateEarning)
+			r.Post("/accounts/{id}/earnings/custom", s.handleProposeChore)
 			r.Post("/accounts/{id}/redemptions", s.handleCreateRedemption)
 
 			// Tasks (holders read active; operators manage).
@@ -93,6 +94,7 @@ func (s *Server) Routes() http.Handler {
 				r.Get("/transactions", s.handleListTransactions)
 				r.Post("/transactions/{id}/settle", s.handleSettle)
 				r.Post("/transactions/{id}/void", s.handleVoid)
+				r.Post("/transactions/{id}/adjust", s.handleAdjustTransaction)
 				r.Get("/audit", s.handleListAudit)
 			})
 		})

@@ -92,13 +92,16 @@ type Account struct {
 }
 
 type Task struct {
-	ID          string    `json:"id"`
-	TenantID    string    `json:"tenant_id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	ValueMinor  int64     `json:"value_minor"`
-	Active      bool      `json:"active"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string     `json:"id"`
+	TenantID    string     `json:"tenant_id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	ValueMinor  int64      `json:"value_minor"`
+	Active      bool       `json:"active"`
+	IsBounty    bool       `json:"is_bounty"`
+	ClaimedBy   *string    `json:"claimed_by,omitempty"`
+	ClaimedAt   *time.Time `json:"claimed_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
 type Transaction struct {

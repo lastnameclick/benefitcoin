@@ -58,6 +58,9 @@ export interface Task {
   description: string;
   value_minor: number;
   active: boolean;
+  is_bounty: boolean;
+  claimed_by?: string;
+  claimed_at?: string;
 }
 
 export type TxType = "earn" | "redeem" | "adjust_credit" | "adjust_debit";
@@ -205,19 +208,23 @@ export const api = {
     request<{ transactions: Transaction[] }>("GET", `/accounts/${id}/transactions`),
 
   listTasks: () => request<{ tasks: Task[] }>("GET", "/tasks"),
-  createTask: (name: string, description: string, value: string) =>
-    request<Task>("POST", "/tasks", { name, description, value }),
+  createTask: (name: string, description: string, value: string, isBounty = false) =>
+    request<Task>("POST", "/tasks", { name, description, value, is_bounty: isBounty }),
   updateTask: (id: string, patch: Partial<{ name: string; description: string; value: string; active: boolean }>) =>
     request<Task>("PATCH", `/tasks/${id}`, patch),
 
   submitEarning: (accountId: string, taskId: string) =>
     request<Transaction>("POST", `/accounts/${accountId}/earnings`, { task_id: taskId }),
+  proposeChore: (accountId: string, description: string, value: string) =>
+    request<Transaction>("POST", `/accounts/${accountId}/earnings/custom`, { description, value }),
   requestRedemption: (accountId: string) =>
     request<Transaction>("POST", `/accounts/${accountId}/redemptions`, {}),
   adjust: (
     accountId: string,
     body: { direction: "credit" | "debit"; amount: string; reason: string; occurred_at?: string; details?: Record<string, unknown> },
   ) => request<Transaction>("POST", `/accounts/${accountId}/adjustments`, body),
+  adjustReward: (transactionId: string, amount: string) =>
+    request<Transaction>("POST", `/transactions/${transactionId}/adjust`, { amount }),
 
   listCustomers: () => request<{ customers: Customer[] }>("GET", "/customers"),
   createCustomer: (type: string, display_name: string, username: string, password: string) =>

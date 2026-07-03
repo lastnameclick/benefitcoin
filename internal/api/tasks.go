@@ -16,8 +16,9 @@ import (
 type taskRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Value       string `json:"value"`            // coin string, e.g. "0.15"
-	Active      *bool  `json:"active,omitempty"` // PATCH only
+	Value       string `json:"value"`               // coin string, e.g. "0.15"
+	Active      *bool  `json:"active,omitempty"`    // PATCH only
+	IsBounty    bool   `json:"is_bounty,omitempty"` // one-time: first holder to claim it wins
 }
 
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
@@ -52,14 +53,18 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	task := &domain.Task{
 		ID: uuid.NewString(), TenantID: actor.TenantID, Name: strings.TrimSpace(req.Name),
-		Description: req.Description, ValueMinor: valueMinor, Active: active,
+		Description: req.Description, ValueMinor: valueMinor, Active: active, IsBounty: req.IsBounty,
 	}
 	if err := s.store.CreateTask(r.Context(), task); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "failed to create task")
 		return
 	}
-	s.audit(r.Context(), actor.IdentityID, "task.create", "task", task.ID,
-		map[string]any{"name": task.Name, "value_minor": task.ValueMinor})
+	action := "task.create"
+	if task.IsBounty {
+		action = "bounty.create"
+	}
+	s.audit(r.Context(), actor.IdentityID, action, "task", task.ID,
+		map[string]any{"name": task.Name, "value_minor": task.ValueMinor, "is_bounty": task.IsBounty})
 	writeJSON(w, http.StatusCreated, task)
 }
 

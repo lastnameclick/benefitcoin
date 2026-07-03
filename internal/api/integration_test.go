@@ -78,6 +78,25 @@ func balanceOf(c *apiClient, token, acctID string) (current, available, awaiting
 		int64(body["awaiting_approval_minor"].(float64))
 }
 
+// mustBalance is a terser balanceOf for tests that only care about current and awaiting.
+func mustBalance(t *testing.T, c *apiClient, token, acctID string) (current, awaiting int64) {
+	t.Helper()
+	cur, _, await := balanceOf(c, token, acctID)
+	return cur, await
+}
+
+// taskListHas reports whether the given task id appears in the caller's task list.
+func taskListHas(c *apiClient, token, taskID string) bool {
+	_, body := c.do(http.MethodGet, "/api/v1/tasks", token, nil, "")
+	tasks, _ := body["tasks"].([]any)
+	for _, raw := range tasks {
+		if m, ok := raw.(map[string]any); ok && m["id"] == taskID {
+			return true
+		}
+	}
+	return false
+}
+
 func TestEndToEnd(t *testing.T) {
 	if os.Getenv("CPAL_INTEGRATION") == "" {
 		t.Skip("set CPAL_INTEGRATION=1 (and run `make up`) to run the integration test")
@@ -266,6 +285,92 @@ func TestEndToEnd(t *testing.T) {
 	// A holder must not settle (operator-only).
 	if stF, _ := c.do(http.MethodPost, "/api/v1/transactions/"+earnTxID+"/settle", kidTok, nil, idem("kid-settle")); stF != http.StatusForbidden {
 		t.Fatalf("expected 403 for holder settle, got %d", stF)
+	}
+
+	// --- Chore proposals: a kid can request coins for something not on the catalog. ---
+	_, awaitBefore := mustBalance(t, c, opTok, acctID)
+
+	stProp, propBody := c.do(http.MethodPost, "/api/v1/accounts/"+acctID+"/earnings/custom", kidTok, map[string]string{
+		"description": "Organized the garage", "value": "0.20",
+	}, idem("propose-1"))
+	if stProp != 201 {
+		t.Fatalf("propose chore: %d %v", stProp, propBody)
+	}
+	proposalID := propBody["id"].(string)
+	if propBody["task_id"] != nil {
+		t.Fatalf("a proposed chore should have no task_id, got %v", propBody["task_id"])
+	}
+	if _, await := mustBalance(t, c, opTok, acctID); await != awaitBefore+200 {
+		t.Fatalf("after propose want awaiting +200 from %d, got %d", awaitBefore, await)
+	}
+
+	// Only operators may adjust the proposed reward.
+	if stF, _ := c.do(http.MethodPost, "/api/v1/transactions/"+proposalID+"/adjust", kidTok, map[string]string{"amount": "0.50"}, idem("kid-adjust")); stF != http.StatusForbidden {
+		t.Fatalf("expected 403 for holder adjust, got %d", stF)
+	}
+
+	// Operator revises the reward up before approving.
+	if stAdj, adjBody := c.do(http.MethodPost, "/api/v1/transactions/"+proposalID+"/adjust", opTok, map[string]string{"amount": "0.50"}, idem("adjust-1")); stAdj != 200 {
+		t.Fatalf("adjust: %d %v", stAdj, adjBody)
+	}
+	if _, await := mustBalance(t, c, opTok, acctID); await != awaitBefore+500 {
+		t.Fatalf("after adjust want awaiting +500 from %d, got %d", awaitBefore, await)
+	}
+
+	curBeforeSettle, _ := mustBalance(t, c, opTok, acctID)
+	if stS, sBody := c.do(http.MethodPost, "/api/v1/transactions/"+proposalID+"/settle", opTok, nil, idem("settle-proposal")); stS != 200 {
+		t.Fatalf("settle proposal: %d %v", stS, sBody)
+	}
+	if cur, await := mustBalance(t, c, opTok, acctID); cur != curBeforeSettle+500 || await != awaitBefore {
+		t.Fatalf("after settling the adjusted proposal want current +500 and awaiting back to %d, got cur=%d await=%d", awaitBefore, cur, await)
+	}
+
+	// --- Bounties: a one-time opportunity every holder sees, first to claim wins. ---
+	_, bBody := c.do(http.MethodPost, "/api/v1/tasks", opTok, map[string]any{
+		"name": "Wash the car", "value": "0.75", "is_bounty": true,
+	}, idem("bounty-1"))
+	bountyID, _ := bBody["id"].(string)
+	if bBody["is_bounty"] != true {
+		t.Fatalf("expected is_bounty=true, got %v", bBody["is_bounty"])
+	}
+
+	// Onboard a second holder to race for the bounty.
+	kid2User := fmt.Sprintf("kid2-%d", uniq)
+	_, body2 := c.do(http.MethodPost, "/api/v1/customers", opTok, map[string]string{
+		"type": "holder", "display_name": "Kiddo2", "username": kid2User, "password": "kidpass2",
+	}, idem("cust2"))
+	acct2 := body2["account"].(map[string]any)
+	acct2ID := acct2["id"].(string)
+	kid2Tok := login(c, kid2User, "kidpass2")
+
+	if !taskListHas(c, kid2Tok, bountyID) {
+		t.Fatal("bounty should be visible to holders before it's claimed")
+	}
+
+	// First kid claims it.
+	stClaim, claimBody := c.do(http.MethodPost, "/api/v1/accounts/"+acctID+"/earnings", kidTok, map[string]string{"task_id": bountyID}, idem("claim-1"))
+	if stClaim != 201 {
+		t.Fatalf("claim bounty: %d %v", stClaim, claimBody)
+	}
+	claimTxID := claimBody["id"].(string)
+
+	// Second kid is too late — it's already claimed.
+	if stLate, lateBody := c.do(http.MethodPost, "/api/v1/accounts/"+acct2ID+"/earnings", kid2Tok, map[string]string{"task_id": bountyID}, idem("claim-2")); stLate != http.StatusConflict {
+		t.Fatalf("expected 409 bounty_claimed for second claim, got %d %v", stLate, lateBody)
+	}
+	if taskListHas(c, kid2Tok, bountyID) {
+		t.Fatal("claimed bounty should be hidden from other holders")
+	}
+
+	// Declining the claim reopens the bounty for anyone.
+	if stV, vBody := c.do(http.MethodPost, "/api/v1/transactions/"+claimTxID+"/void", opTok, nil, idem("void-claim")); stV != 200 {
+		t.Fatalf("void claim: %d %v", stV, vBody)
+	}
+	if !taskListHas(c, kid2Tok, bountyID) {
+		t.Fatal("bounty should reopen after its claim is declined")
+	}
+	if stClaim2, claim2Body := c.do(http.MethodPost, "/api/v1/accounts/"+acct2ID+"/earnings", kid2Tok, map[string]string{"task_id": bountyID}, idem("claim-3")); stClaim2 != 201 {
+		t.Fatalf("reclaim bounty: %d %v", stClaim2, claim2Body)
 	}
 
 	// Tenant isolation: a second household must not see or touch the first's data.
