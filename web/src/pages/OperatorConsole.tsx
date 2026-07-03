@@ -973,6 +973,15 @@ function Chores() {
             >
               This week
             </button>
+            {bountyForm.expiresAt && (
+              <button
+                type="button"
+                className="btn-ghost sm"
+                onClick={() => setBountyForm({ ...bountyForm, expiresAt: "" })}
+              >
+                <IconX width={14} height={14} /> Clear
+              </button>
+            )}
           </div>
           <Notice msg={bountyMsg} err={bountyErr} />
           <button className="btn-primary">
