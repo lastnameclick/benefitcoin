@@ -753,6 +753,13 @@ function Chores() {
     }
   };
 
+  // Bounties sink to the bottom so the regular catalog reads cleanly; order
+  // within each group is otherwise unchanged (stable sort).
+  const sortedTasks = useMemo(
+    () => [...tasks].sort((a, b) => Number(a.is_bounty) - Number(b.is_bounty)),
+    [tasks],
+  );
+
   return (
     <div className="grid-2">
       <Panel
@@ -764,7 +771,7 @@ function Chores() {
           <Empty title="No chores yet." hint="Add one below." />
         ) : (
           <ul className="rows">
-            {tasks.map((t) => (
+            {sortedTasks.map((t) => (
               <li key={t.id} className="row">
                 <div>
                   <div className="row-title">
