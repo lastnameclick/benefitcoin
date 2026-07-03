@@ -498,6 +498,22 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("expected error code bounty_expired, got %v", expClaimBody["error"])
 	}
 
+	// It's also auto-retired (not just hidden), so the operator's catalog
+	// reflects reality without a manual "Retire" click.
+	_, opListBody := c.do(http.MethodGet, "/api/v1/tasks", opTok, nil, "")
+	var expiredTask map[string]any
+	for _, raw := range opListBody["tasks"].([]any) {
+		if m := raw.(map[string]any); m["id"] == expiringID {
+			expiredTask = m
+		}
+	}
+	if expiredTask == nil {
+		t.Fatal("operator should still see the expired bounty in their full task list")
+	}
+	if expiredTask["active"] != false {
+		t.Fatalf("expired bounty should have been auto-retired (active=false), got %v", expiredTask["active"])
+	}
+
 	// Tenant isolation: a second household must not see or touch the first's data.
 	otherEmail := fmt.Sprintf("other-%d@example.com", uniq)
 	_, oBody := c.do(http.MethodPost, "/api/v1/auth/signup", "", map[string]string{

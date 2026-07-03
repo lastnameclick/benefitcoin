@@ -14,6 +14,7 @@ import {
 import { useBranding } from "../branding";
 import { AccountCharts, Inbox } from "../components/charts";
 import { DashboardShell, type Section } from "../components/DashboardShell";
+import { relativeTime } from "../lib/time";
 import {
   BalanceTiles,
   Empty,
@@ -304,7 +305,8 @@ function Earn({
                   )}
                   {t.expires_at && (
                     <div className="row-sub bounty-deadline">
-                      Ends {new Date(t.expires_at).toLocaleString()}
+                      Ends {new Date(t.expires_at).toLocaleString()} (
+                      {relativeTime(t.expires_at)})
                     </div>
                   )}
                 </div>

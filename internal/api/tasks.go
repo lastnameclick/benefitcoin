@@ -25,6 +25,14 @@ type taskRequest struct {
 
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	claims, _ := auth.FromContext(r.Context())
+	// Best-effort sweep: retire bounties whose deadline passed since nobody
+	// claimed them, so the catalog reflects reality without a manual click.
+	// Non-fatal — a transient failure here shouldn't block listing tasks.
+	if expired, err := s.store.RetireExpiredBounties(r.Context(), claims.TenantID); err == nil {
+		for _, id := range expired {
+			s.audit(r.Context(), claims.IdentityID, "bounty.expire", "task", id, nil)
+		}
+	}
 	activeOnly := claims.Role != domain.RoleOperator // holders only see active tasks
 	tasks, err := s.store.ListTasks(r.Context(), claims.TenantID, activeOnly)
 	if err != nil {

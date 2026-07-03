@@ -19,6 +19,7 @@ import {
 import { useBranding } from "../branding";
 import { AccountCharts, HouseholdCharts, Inbox } from "../components/charts";
 import { DashboardShell, type Section } from "../components/DashboardShell";
+import { relativeTime } from "../lib/time";
 import {
   BalanceTiles,
   Empty,
@@ -774,12 +775,10 @@ function Chores() {
     }
   };
 
-  // Bounties sink to the bottom so the regular catalog reads cleanly; order
-  // within each group is otherwise unchanged (stable sort).
-  const sortedTasks = useMemo(
-    () => [...tasks].sort((a, b) => Number(a.is_bounty) - Number(b.is_bounty)),
-    [tasks],
-  );
+  // Bounties get their own history section so a flurry of one-off claims
+  // doesn't clog the everyday chore catalog.
+  const catalogTasks = tasks.filter((t) => !t.is_bounty);
+  const bountyTasks = tasks.filter((t) => t.is_bounty);
 
   return (
     <div className="grid-2">
@@ -788,32 +787,21 @@ function Chores() {
         title="Chore catalog"
         sub="What holders can earn. Retire a chore to hide it without deleting history."
       >
-        {tasks.length === 0 ? (
+        {catalogTasks.length === 0 ? (
           <Empty title="No chores yet." hint="Add one below." />
         ) : (
           <ul className="rows">
-            {sortedTasks.map((t) => {
-              const expired = !!t.expires_at && new Date(t.expires_at) <= new Date();
-              const bountyStatus = t.claimed_by ? "claimed" : expired ? "expired" : "open";
-              return (
+            {catalogTasks.map((t) => (
               <li key={t.id} className="row">
                 <div>
                   <div className="row-title">
                     {t.name}{" "}
-                    {t.is_bounty && (
-                      <span className="chip chip-bounty">bounty · {bountyStatus}</span>
-                    )}
                     {!t.active && (
                       <span className="chip chip-off">retired</span>
                     )}
                   </div>
                   {t.description && (
                     <div className="row-sub">{t.description}</div>
-                  )}
-                  {t.is_bounty && t.expires_at && (
-                    <div className="row-sub">
-                      {expired ? "Expired" : "Expires"} {new Date(t.expires_at).toLocaleString()}
-                    </div>
                   )}
                 </div>
                 <div className="row-right">
@@ -831,6 +819,56 @@ function Chores() {
                   </button>
                 </div>
               </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+      <Panel
+        className="span-2"
+        title="Bounty history"
+        sub="Every bounty you've posted — open, claimed, or expired."
+      >
+        {bountyTasks.length === 0 ? (
+          <Empty title="No bounties yet." hint="Post one below." />
+        ) : (
+          <ul className="rows">
+            {bountyTasks.map((t) => {
+              const expired = !!t.expires_at && new Date(t.expires_at) <= new Date();
+              const status = t.claimed_by ? "claimed" : expired ? "expired" : "open";
+              return (
+                <li key={t.id} className="row">
+                  <div>
+                    <div className="row-title">
+                      {t.name} <span className="chip chip-bounty">bounty · {status}</span>
+                      {!t.active && (
+                        <span className="chip chip-off">retired</span>
+                      )}
+                    </div>
+                    {t.description && (
+                      <div className="row-sub">{t.description}</div>
+                    )}
+                    {t.expires_at && (
+                      <div className="row-sub">
+                        {expired ? "Expired" : "Expires"} {new Date(t.expires_at).toLocaleString()} (
+                        {relativeTime(t.expires_at)})
+                      </div>
+                    )}
+                  </div>
+                  <div className="row-right">
+                    <Money minor={t.value_minor} signed className="pos" />
+                    <button
+                      className="btn-ghost sm"
+                      onClick={() =>
+                        run(
+                          () => api.updateTask(t.id, { active: !t.active }),
+                          load,
+                        )
+                      }
+                    >
+                      {t.active ? "Retire" : "Restore"}
+                    </button>
+                  </div>
+                </li>
               );
             })}
           </ul>

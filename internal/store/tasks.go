@@ -103,3 +103,30 @@ func (s *Store) ReleaseBountyClaim(ctx context.Context, tenantID, taskID string)
 		taskID, tenantID)
 	return err
 }
+
+// RetireExpiredBounties deactivates bounties whose deadline has passed but
+// were never claimed, so the catalog doesn't need a manual "Retire" click for
+// something that's already unclaimable. This only flips active — it never
+// deletes the row, preserving history like a manual retire does. Returns the
+// ids it retired, for auditing.
+func (s *Store) RetireExpiredBounties(ctx context.Context, tenantID string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		UPDATE tasks SET active = false
+		WHERE tenant_id=$1 AND is_bounty AND active
+		  AND expires_at IS NOT NULL AND expires_at <= now()
+		RETURNING id`,
+		tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
