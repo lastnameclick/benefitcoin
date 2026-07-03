@@ -61,6 +61,7 @@ export interface Task {
   is_bounty: boolean;
   claimed_by?: string;
   claimed_at?: string;
+  expires_at?: string;
 }
 
 export type TxType = "earn" | "redeem" | "adjust_credit" | "adjust_debit";
@@ -282,8 +283,19 @@ export const api = {
     request<{ transactions: Transaction[] }>("GET", `/accounts/${id}/transactions`),
 
   listTasks: () => request<{ tasks: Task[] }>("GET", "/tasks"),
-  createTask: (name: string, description: string, value: string, isBounty = false) =>
-    request<Task>("POST", "/tasks", { name, description, value, is_bounty: isBounty }),
+  createTask: (
+    name: string,
+    description: string,
+    value: string,
+    opts?: { isBounty?: boolean; expiresAt?: string },
+  ) =>
+    request<Task>("POST", "/tasks", {
+      name,
+      description,
+      value,
+      is_bounty: opts?.isBounty ?? false,
+      expires_at: opts?.expiresAt || undefined,
+    }),
   updateTask: (id: string, patch: Partial<{ name: string; description: string; value: string; active: boolean }>) =>
     request<Task>("PATCH", `/tasks/${id}`, patch),
 

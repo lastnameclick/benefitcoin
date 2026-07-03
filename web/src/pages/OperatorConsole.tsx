@@ -732,7 +732,7 @@ function Chores() {
   const [form, setForm] = useState({ name: "", description: "", value: "" });
   const [bountyErr, setBountyErr] = useState("");
   const [bountyMsg, setBountyMsg] = useState("");
-  const [bountyForm, setBountyForm] = useState({ name: "", description: "", value: "" });
+  const [bountyForm, setBountyForm] = useState({ name: "", description: "", value: "", expiresAt: "" });
 
   const load = useCallback(async () => {
     const { tasks } = await api.listTasks();
@@ -758,9 +758,16 @@ function Chores() {
     setBountyErr("");
     setBountyMsg("");
     try {
-      await api.createTask(bountyForm.name, bountyForm.description, bountyForm.value, true);
-      setBountyMsg(`Posted "${bountyForm.name}" — every kid will see it until one claims it.`);
-      setBountyForm({ name: "", description: "", value: "" });
+      await api.createTask(bountyForm.name, bountyForm.description, bountyForm.value, {
+        isBounty: true,
+        expiresAt: bountyForm.expiresAt ? new Date(bountyForm.expiresAt).toISOString() : undefined,
+      });
+      setBountyMsg(
+        bountyForm.expiresAt
+          ? `Posted "${bountyForm.name}" — it expires ${new Date(bountyForm.expiresAt).toLocaleString()}.`
+          : `Posted "${bountyForm.name}" — every kid will see it until one claims it.`,
+      );
+      setBountyForm({ name: "", description: "", value: "", expiresAt: "" });
       load();
     } catch (e) {
       setBountyErr(e instanceof ApiError ? e.message : String(e));
@@ -785,15 +792,16 @@ function Chores() {
           <Empty title="No chores yet." hint="Add one below." />
         ) : (
           <ul className="rows">
-            {sortedTasks.map((t) => (
+            {sortedTasks.map((t) => {
+              const expired = !!t.expires_at && new Date(t.expires_at) <= new Date();
+              const bountyStatus = t.claimed_by ? "claimed" : expired ? "expired" : "open";
+              return (
               <li key={t.id} className="row">
                 <div>
                   <div className="row-title">
                     {t.name}{" "}
                     {t.is_bounty && (
-                      <span className="chip chip-bounty">
-                        {t.claimed_by ? "bounty · claimed" : "bounty · open"}
-                      </span>
+                      <span className="chip chip-bounty">bounty · {bountyStatus}</span>
                     )}
                     {!t.active && (
                       <span className="chip chip-off">retired</span>
@@ -801,6 +809,11 @@ function Chores() {
                   </div>
                   {t.description && (
                     <div className="row-sub">{t.description}</div>
+                  )}
+                  {t.is_bounty && t.expires_at && (
+                    <div className="row-sub">
+                      {expired ? "Expired" : "Expires"} {new Date(t.expires_at).toLocaleString()}
+                    </div>
                   )}
                 </div>
                 <div className="row-right">
@@ -818,7 +831,8 @@ function Chores() {
                   </button>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </Panel>
@@ -880,6 +894,14 @@ function Chores() {
             <input
               value={bountyForm.value}
               onChange={(e) => setBountyForm({ ...bountyForm, value: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            Expires <span className="field-opt">optional — leave blank for no deadline</span>
+            <input
+              type="datetime-local"
+              value={bountyForm.expiresAt}
+              onChange={(e) => setBountyForm({ ...bountyForm, expiresAt: e.target.value })}
             />
           </label>
           <Notice msg={bountyMsg} err={bountyErr} />

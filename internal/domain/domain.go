@@ -101,6 +101,7 @@ type Task struct {
 	IsBounty    bool       `json:"is_bounty"`
 	ClaimedBy   *string    `json:"claimed_by,omitempty"`
 	ClaimedAt   *time.Time `json:"claimed_at,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
 

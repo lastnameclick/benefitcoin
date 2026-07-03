@@ -302,6 +302,11 @@ function Earn({
                   {t.description && (
                     <div className="row-sub">{t.description}</div>
                   )}
+                  {t.expires_at && (
+                    <div className="row-sub bounty-deadline">
+                      Ends {new Date(t.expires_at).toLocaleString()}
+                    </div>
+                  )}
                 </div>
                 <div className="row-right">
                   <Money minor={t.value_minor} signed className="pos" />

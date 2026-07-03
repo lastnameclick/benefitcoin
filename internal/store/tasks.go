@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"cpal/internal/domain"
 
@@ -11,19 +12,19 @@ import (
 
 func (s *Store) CreateTask(ctx context.Context, t *domain.Task) error {
 	return s.pool.QueryRow(ctx, `
-		INSERT INTO tasks (id, tenant_id, name, description, value_minor, active, is_bounty)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO tasks (id, tenant_id, name, description, value_minor, active, is_bounty, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING created_at`,
-		t.ID, t.TenantID, t.Name, t.Description, t.ValueMinor, t.Active, t.IsBounty,
+		t.ID, t.TenantID, t.Name, t.Description, t.ValueMinor, t.Active, t.IsBounty, t.ExpiresAt,
 	).Scan(&t.CreatedAt)
 }
 
-const taskSelect = `SELECT id, tenant_id, name, description, value_minor, active, is_bounty, claimed_by, claimed_at, created_at FROM tasks`
+const taskSelect = `SELECT id, tenant_id, name, description, value_minor, active, is_bounty, claimed_by, claimed_at, expires_at, created_at FROM tasks`
 
 func (s *Store) GetTask(ctx context.Context, tenantID, id string) (domain.Task, error) {
 	var t domain.Task
 	err := s.pool.QueryRow(ctx, taskSelect+` WHERE id=$1 AND tenant_id=$2`, id, tenantID,
-	).Scan(&t.ID, &t.TenantID, &t.Name, &t.Description, &t.ValueMinor, &t.Active, &t.IsBounty, &t.ClaimedBy, &t.ClaimedAt, &t.CreatedAt)
+	).Scan(&t.ID, &t.TenantID, &t.Name, &t.Description, &t.ValueMinor, &t.Active, &t.IsBounty, &t.ClaimedBy, &t.ClaimedAt, &t.ExpiresAt, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -31,11 +32,13 @@ func (s *Store) GetTask(ctx context.Context, tenantID, id string) (domain.Task, 
 }
 
 // ListTasks returns the tenant's tasks. When activeOnly is set (the holder
-// view), retired tasks and already-claimed bounties are excluded.
+// view), retired tasks, already-claimed bounties, and expired bounties are
+// excluded.
 func (s *Store) ListTasks(ctx context.Context, tenantID string, activeOnly bool) ([]domain.Task, error) {
 	query := taskSelect + ` WHERE tenant_id=$1`
 	if activeOnly {
-		query += ` AND active = true AND (NOT is_bounty OR claimed_by IS NULL)`
+		query += ` AND active = true
+			AND (NOT is_bounty OR (claimed_by IS NULL AND (expires_at IS NULL OR expires_at > now())))`
 	}
 	query += ` ORDER BY created_at DESC`
 	rows, err := s.pool.Query(ctx, query, tenantID)
@@ -46,7 +49,7 @@ func (s *Store) ListTasks(ctx context.Context, tenantID string, activeOnly bool)
 	var out []domain.Task
 	for rows.Next() {
 		var t domain.Task
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.Name, &t.Description, &t.ValueMinor, &t.Active, &t.IsBounty, &t.ClaimedBy, &t.ClaimedAt, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.Name, &t.Description, &t.ValueMinor, &t.Active, &t.IsBounty, &t.ClaimedBy, &t.ClaimedAt, &t.ExpiresAt, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -70,17 +73,22 @@ func (s *Store) UpdateTask(ctx context.Context, t *domain.Task) error {
 }
 
 // ClaimBounty atomically marks a bounty task as claimed by a customer, so two
-// holders can't both win the same one-time bounty. Returns ErrConflict if it
-// isn't an unclaimed bounty.
+// holders can't both win the same one-time bounty. Returns ErrExpired if its
+// deadline has passed, or ErrConflict if it's otherwise not an unclaimed bounty.
 func (s *Store) ClaimBounty(ctx context.Context, tenantID, taskID, customerID string) error {
 	ct, err := s.pool.Exec(ctx, `
 		UPDATE tasks SET claimed_by=$3, claimed_at=now()
-		WHERE id=$1 AND tenant_id=$2 AND is_bounty AND active AND claimed_by IS NULL`,
+		WHERE id=$1 AND tenant_id=$2 AND is_bounty AND active AND claimed_by IS NULL
+		  AND (expires_at IS NULL OR expires_at > now())`,
 		taskID, tenantID, customerID)
 	if err != nil {
 		return err
 	}
 	if ct.RowsAffected() == 0 {
+		task, gerr := s.GetTask(ctx, tenantID, taskID)
+		if gerr == nil && task.ExpiresAt != nil && !task.ExpiresAt.After(time.Now()) {
+			return ErrExpired
+		}
 		return ErrConflict
 	}
 	return nil

@@ -466,6 +466,38 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("reclaim bounty: %d %v", stClaim2, claim2Body)
 	}
 
+	// --- Bounties can be timeboxed: expires_at is rejected unless it's a future date on a bounty. ---
+	if stBad, badBody := c.do(http.MethodPost, "/api/v1/tasks", opTok, map[string]any{
+		"name": "Not a bounty", "value": "0.10", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+	}, idem("bad-expiry-1")); stBad != http.StatusBadRequest {
+		t.Fatalf("expected 400 for expires_at on a non-bounty task, got %d %v", stBad, badBody)
+	}
+	if stBad, badBody := c.do(http.MethodPost, "/api/v1/tasks", opTok, map[string]any{
+		"name": "Already over", "value": "0.10", "is_bounty": true,
+		"expires_at": time.Now().Add(-time.Hour).Format(time.RFC3339),
+	}, idem("bad-expiry-2")); stBad != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a past expires_at, got %d %v", stBad, badBody)
+	}
+
+	// A bounty with a near deadline disappears and becomes unclaimable once it passes.
+	_, expBody := c.do(http.MethodPost, "/api/v1/tasks", opTok, map[string]any{
+		"name": "Blink and it's gone", "value": "0.30", "is_bounty": true,
+		"expires_at": time.Now().Add(1500 * time.Millisecond).Format(time.RFC3339),
+	}, idem("bounty-expiring"))
+	expiringID, _ := expBody["id"].(string)
+	if !taskListHas(c, kid2Tok, expiringID) {
+		t.Fatal("a bounty should be visible before its deadline")
+	}
+	time.Sleep(2 * time.Second)
+	if taskListHas(c, kid2Tok, expiringID) {
+		t.Fatal("an expired bounty should be hidden even though nobody claimed it")
+	}
+	if stExp, expClaimBody := c.do(http.MethodPost, "/api/v1/accounts/"+acct2ID+"/earnings", kid2Tok, map[string]string{"task_id": expiringID}, idem("claim-expired")); stExp != http.StatusConflict {
+		t.Fatalf("expected 409 bounty_expired for a claim after the deadline, got %d %v", stExp, expClaimBody)
+	} else if expClaimBody["error"].(map[string]any)["code"] != "bounty_expired" {
+		t.Fatalf("expected error code bounty_expired, got %v", expClaimBody["error"])
+	}
+
 	// Tenant isolation: a second household must not see or touch the first's data.
 	otherEmail := fmt.Sprintf("other-%d@example.com", uniq)
 	_, oBody := c.do(http.MethodPost, "/api/v1/auth/signup", "", map[string]string{

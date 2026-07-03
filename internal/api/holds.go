@@ -50,10 +50,15 @@ func (s *Server) handleCreateEarning(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if task.IsBounty {
-		if err := s.store.ClaimBounty(r.Context(), actor.TenantID, task.ID, actor.CustomerID); err == store.ErrConflict {
+		err := s.store.ClaimBounty(r.Context(), actor.TenantID, task.ID, actor.CustomerID)
+		switch {
+		case err == store.ErrExpired:
+			writeErr(w, http.StatusConflict, "bounty_expired", "this bounty's deadline has passed")
+			return
+		case err == store.ErrConflict:
 			writeErr(w, http.StatusConflict, "bounty_claimed", "someone already claimed this bounty")
 			return
-		} else if err != nil {
+		case err != nil:
 			writeErr(w, http.StatusInternalServerError, "internal", "failed to claim bounty")
 			return
 		}
