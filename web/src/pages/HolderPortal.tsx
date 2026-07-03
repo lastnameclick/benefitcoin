@@ -12,6 +12,7 @@ import {
   type Transaction,
 } from "../api";
 import { useBranding } from "../branding";
+import { AccountCharts, Inbox } from "../components/charts";
 import { DashboardShell, type Section } from "../components/DashboardShell";
 import {
   BalanceTiles,
@@ -25,9 +26,10 @@ import {
 import {
   IconActivity,
   IconArrowRight,
-  IconBook,
+  IconChart,
   IconCheck,
   IconHome,
+  IconInbox,
   IconList,
   IconZap,
 } from "../components/icons";
@@ -143,6 +145,32 @@ export default function HolderPortal() {
           }
         />
       ),
+    },
+    {
+      key: "charts",
+      label: "Charts",
+      icon: <IconChart />,
+      render: () =>
+        account ? (
+          <AccountCharts accountId={account.id} />
+        ) : (
+          <Panel title="Charts">
+            <Empty title="No account yet." />
+          </Panel>
+        ),
+    },
+    {
+      key: "inbox",
+      label: "Inbox",
+      icon: <IconInbox />,
+      render: () =>
+        account ? (
+          <Inbox accountId={account.id} />
+        ) : (
+          <Panel title="Inbox">
+            <Empty title="No account yet." />
+          </Panel>
+        ),
     },
   ];
 
