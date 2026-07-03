@@ -19,7 +19,7 @@ import {
 import { useBranding } from "../branding";
 import { AccountCharts, HouseholdCharts, Inbox } from "../components/charts";
 import { DashboardShell, type Section } from "../components/DashboardShell";
-import { relativeTime } from "../lib/time";
+import { datetimeLocal, endOfDay, endOfWeek, relativeTime } from "../lib/time";
 import {
   BalanceTiles,
   Empty,
@@ -942,6 +942,38 @@ function Chores() {
               onChange={(e) => setBountyForm({ ...bountyForm, expiresAt: e.target.value })}
             />
           </label>
+          <div className="quick-dates">
+            <button
+              type="button"
+              className="btn-ghost sm"
+              onClick={() =>
+                setBountyForm({
+                  ...bountyForm,
+                  expiresAt: datetimeLocal(new Date(Date.now() + 2 * 60 * 60 * 1000)),
+                })
+              }
+            >
+              Within 2 hours
+            </button>
+            <button
+              type="button"
+              className="btn-ghost sm"
+              onClick={() =>
+                setBountyForm({ ...bountyForm, expiresAt: datetimeLocal(endOfDay(new Date())) })
+              }
+            >
+              End of day today
+            </button>
+            <button
+              type="button"
+              className="btn-ghost sm"
+              onClick={() =>
+                setBountyForm({ ...bountyForm, expiresAt: datetimeLocal(endOfWeek(new Date())) })
+              }
+            >
+              This week
+            </button>
+          </div>
           <Notice msg={bountyMsg} err={bountyErr} />
           <button className="btn-primary">
             <IconZap width={16} height={16} /> Post bounty

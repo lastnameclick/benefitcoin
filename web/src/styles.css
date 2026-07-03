@@ -360,6 +360,8 @@ button.danger:hover { background: var(--debit); color: var(--sheet); }
 .bounty-icon { color: var(--warn); flex: 0 0 auto; }
 .bounty-deadline { color: var(--warn); font-weight: 500; }
 .adjust-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.quick-dates { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -6px; }
+.quick-dates .btn-ghost { font-weight: 400; }
 .adjust-input { width: 100px; padding: 6px 10px !important; font-size: 0.86rem !important; }
 
 /* --- buttons --- */
