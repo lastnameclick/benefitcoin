@@ -76,7 +76,20 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/accounts/{id}/balance", s.handleGetBalance)
 			r.Get("/accounts/{id}/transactions", s.handleAccountTransactions)
 			r.Post("/accounts/{id}/earnings", s.handleCreateEarning)
+			r.Post("/accounts/{id}/earnings/custom", s.handleProposeChore)
 			r.Post("/accounts/{id}/redemptions", s.handleCreateRedemption)
+
+			// Charts (holders see their own account; operators can view any).
+			r.Get("/accounts/{id}/charts/balance-history", s.handleBalanceHistory)
+			r.Get("/accounts/{id}/charts/earn-redeem", s.handleEarnRedeem)
+			r.Get("/accounts/{id}/charts/redemption-frequency", s.handleRedemptionFrequency)
+			r.Get("/accounts/{id}/charts/task-leaderboard", s.handleTaskLeaderboard)
+
+			// Monthly PDF statements: on-demand generation and the always-available
+			// in-app Inbox (works with zero SMTP configuration).
+			r.Get("/accounts/{id}/statement.pdf", s.handleDownloadStatement)
+			r.Get("/accounts/{id}/inbox", s.handleListInbox)
+			r.Get("/accounts/{id}/inbox/{statementId}/pdf", s.handleDownloadInboxStatement)
 
 			// Tasks (holders read active; operators manage).
 			r.Get("/tasks", s.handleListTasks)
@@ -93,7 +106,10 @@ func (s *Server) Routes() http.Handler {
 				r.Get("/transactions", s.handleListTransactions)
 				r.Post("/transactions/{id}/settle", s.handleSettle)
 				r.Post("/transactions/{id}/void", s.handleVoid)
+				r.Post("/transactions/{id}/adjust", s.handleAdjustTransaction)
 				r.Get("/audit", s.handleListAudit)
+				r.Get("/tenant/charts/task-leaderboard", s.handleHouseholdLeaderboard)
+				r.Get("/tenant/charts/household-overview", s.handleHouseholdOverview)
 			})
 		})
 	})

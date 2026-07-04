@@ -92,13 +92,17 @@ type Account struct {
 }
 
 type Task struct {
-	ID          string    `json:"id"`
-	TenantID    string    `json:"tenant_id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	ValueMinor  int64     `json:"value_minor"`
-	Active      bool      `json:"active"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string     `json:"id"`
+	TenantID    string     `json:"tenant_id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	ValueMinor  int64      `json:"value_minor"`
+	Active      bool       `json:"active"`
+	IsBounty    bool       `json:"is_bounty"`
+	ClaimedBy   *string    `json:"claimed_by,omitempty"`
+	ClaimedAt   *time.Time `json:"claimed_at,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
 type Transaction struct {
@@ -149,3 +153,51 @@ func (b Balance) Available() int64 { return b.Current() - b.DebitsPending }
 
 // AwaitingApproval is the sum of pending earnings not yet settled.
 func (b Balance) AwaitingApproval() int64 { return b.CreditsPending }
+
+// BalancePoint is one bucketed point in a balance-over-time series, derived
+// from settled transactions (not the live ledger, which has no history).
+type BalancePoint struct {
+	Bucket       time.Time `json:"bucket"`
+	BalanceMinor int64     `json:"balance_minor"`
+}
+
+// EarnRedeemBucket sums settled earn-side vs redeem-side activity in one bucket.
+type EarnRedeemBucket struct {
+	Bucket        time.Time `json:"bucket"`
+	EarnedMinor   int64     `json:"earned_minor"`
+	RedeemedMinor int64     `json:"redeemed_minor"`
+}
+
+// TaskLeaderboardEntry ranks a catalog task (or bounty) by settled earnings.
+type TaskLeaderboardEntry struct {
+	TaskID     string `json:"task_id"`
+	TaskName   string `json:"task_name"`
+	IsBounty   bool   `json:"is_bounty"`
+	Count      int64  `json:"count"`
+	TotalMinor int64  `json:"total_minor"`
+}
+
+// FrequencyBucket is one count in a RedemptionFrequency breakdown.
+type FrequencyBucket struct {
+	Bucket int   `json:"bucket"` // hour 0-23, weekday 0-6 (Sun=0), or month 1-12
+	Count  int64 `json:"count"`
+}
+
+// RedemptionFrequency buckets settled redemptions three different ways.
+type RedemptionFrequency struct {
+	ByHour    []FrequencyBucket `json:"by_hour"`
+	ByWeekday []FrequencyBucket `json:"by_weekday"`
+	ByMonth   []FrequencyBucket `json:"by_month"`
+}
+
+// StatementMeta describes a generated PDF statement without its bytes — the
+// Inbox listing shape.
+type StatementMeta struct {
+	ID          string     `json:"id"`
+	TenantID    string     `json:"tenant_id"`
+	AccountID   string     `json:"account_id"`
+	Period      time.Time  `json:"period"`
+	GeneratedAt time.Time  `json:"generated_at"`
+	EmailedAt   *time.Time `json:"emailed_at,omitempty"`
+	ViewedAt    *time.Time `json:"viewed_at,omitempty"`
+}

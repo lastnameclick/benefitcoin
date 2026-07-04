@@ -46,6 +46,24 @@ func (s *Store) DecideTransaction(ctx context.Context, tenantID, id string, stat
 	return nil
 }
 
+// AdjustTransactionAmount changes the amount and backing ledger hold of a
+// still-pending transaction (an operator revising a proposed reward before
+// deciding it). Returns ErrNotFound if it's missing or no longer pending.
+func (s *Store) AdjustTransactionAmount(ctx context.Context, tenantID, id string, amountMinor int64, pendingTransferID string) error {
+	ct, err := s.pool.Exec(ctx, `
+		UPDATE transactions
+		SET amount_minor=$3, tb_pending_transfer_id=$4
+		WHERE id=$1 AND tenant_id=$2 AND status='pending'`,
+		id, tenantID, amountMinor, pendingTransferID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) GetTransaction(ctx context.Context, tenantID, id string) (domain.Transaction, error) {
 	return s.scanTx(ctx, txSelect+` WHERE id=$1 AND tenant_id=$2`, id, tenantID)
 }
@@ -59,6 +77,29 @@ func (s *Store) ListTransactions(ctx context.Context, tenantID, status, accountI
 	query := txSelect + ` WHERE tenant_id=$1 AND ($2='' OR status=$2) AND ($3='' OR account_id=$3::uuid)
 		ORDER BY created_at DESC LIMIT $4`
 	rows, err := s.pool.Query(ctx, query, tenantID, status, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Transaction
+	for rows.Next() {
+		t, err := scanTxRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// ListTransactionsInRange returns an account's settled transactions whose
+// value date falls in [from, to), oldest first — the statement's line items.
+func (s *Store) ListTransactionsInRange(ctx context.Context, tenantID, accountID string, from, to time.Time) ([]domain.Transaction, error) {
+	rows, err := s.pool.Query(ctx, txSelect+`
+		WHERE tenant_id=$1 AND account_id=$2 AND status='settled'
+		  AND COALESCE(effective_at, created_at) >= $3 AND COALESCE(effective_at, created_at) < $4
+		ORDER BY COALESCE(effective_at, created_at)`,
+		tenantID, accountID, from, to)
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"cpal/internal/auth"
 	"cpal/internal/domain"
@@ -16,12 +17,22 @@ import (
 type taskRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Value       string `json:"value"`            // coin string, e.g. "0.15"
-	Active      *bool  `json:"active,omitempty"` // PATCH only
+	Value       string `json:"value"`                // coin string, e.g. "0.15"
+	Active      *bool  `json:"active,omitempty"`     // PATCH only
+	IsBounty    bool   `json:"is_bounty,omitempty"`  // one-time: first holder to claim it wins
+	ExpiresAt   string `json:"expires_at,omitempty"` // bounty only: "YYYY-MM-DD" or RFC3339; empty means it never expires
 }
 
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	claims, _ := auth.FromContext(r.Context())
+	// Best-effort sweep: retire bounties whose deadline passed since nobody
+	// claimed them, so the catalog reflects reality without a manual click.
+	// Non-fatal — a transient failure here shouldn't block listing tasks.
+	if expired, err := s.store.RetireExpiredBounties(r.Context(), claims.TenantID); err == nil {
+		for _, id := range expired {
+			s.audit(r.Context(), claims.IdentityID, "bounty.expire", "task", id, nil)
+		}
+	}
 	activeOnly := claims.Role != domain.RoleOperator // holders only see active tasks
 	tasks, err := s.store.ListTasks(r.Context(), claims.TenantID, activeOnly)
 	if err != nil {
@@ -50,16 +61,38 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	if req.Active != nil {
 		active = *req.Active
 	}
+	var expiresAt *time.Time
+	if strings.TrimSpace(req.ExpiresAt) != "" {
+		if !req.IsBounty {
+			writeErr(w, http.StatusBadRequest, "bad_request", "expires_at only applies to bounties")
+			return
+		}
+		t, err := parseOccurred(req.ExpiresAt)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_request", "expires_at must be a date (YYYY-MM-DD) or RFC3339 timestamp")
+			return
+		}
+		if t == nil || !t.After(time.Now()) {
+			writeErr(w, http.StatusBadRequest, "bad_request", "expires_at must be in the future")
+			return
+		}
+		expiresAt = t
+	}
 	task := &domain.Task{
 		ID: uuid.NewString(), TenantID: actor.TenantID, Name: strings.TrimSpace(req.Name),
-		Description: req.Description, ValueMinor: valueMinor, Active: active,
+		Description: req.Description, ValueMinor: valueMinor, Active: active, IsBounty: req.IsBounty,
+		ExpiresAt: expiresAt,
 	}
 	if err := s.store.CreateTask(r.Context(), task); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "failed to create task")
 		return
 	}
-	s.audit(r.Context(), actor.IdentityID, "task.create", "task", task.ID,
-		map[string]any{"name": task.Name, "value_minor": task.ValueMinor})
+	action := "task.create"
+	if task.IsBounty {
+		action = "bounty.create"
+	}
+	s.audit(r.Context(), actor.IdentityID, action, "task", task.ID,
+		map[string]any{"name": task.Name, "value_minor": task.ValueMinor, "is_bounty": task.IsBounty, "expires_at": expiresAt})
 	writeJSON(w, http.StatusCreated, task)
 }
 

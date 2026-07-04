@@ -32,3 +32,26 @@ func (s *Store) GetTenant(ctx context.Context, id string) (domain.Tenant, error)
 	}
 	return t, err
 }
+
+// ListActiveTenants returns every active household, for the monthly statement
+// job to iterate.
+func (s *Store) ListActiveTenants(ctx context.Context) ([]domain.Tenant, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, status, issuance_account_id, redemption_account_id,
+		       issuance_tb_id, redemption_tb_id, created_at
+		FROM tenants WHERE status='active' ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Tenant
+	for rows.Next() {
+		var t domain.Tenant
+		if err := rows.Scan(&t.ID, &t.Name, &t.Status, &t.IssuanceAccountID, &t.RedemptionAccountID,
+			&t.IssuanceTBID, &t.RedemptionTBID, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

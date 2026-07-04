@@ -8,6 +8,7 @@ import {
 import {
   api,
   ApiError,
+  coins,
   isCredit,
   type Account,
   type AuditEvent,
@@ -16,7 +17,9 @@ import {
   type Transaction,
 } from "../api";
 import { useBranding } from "../branding";
+import { AccountCharts, HouseholdCharts, Inbox } from "../components/charts";
 import { DashboardShell, type Section } from "../components/DashboardShell";
+import { datetimeLocal, endOfDay, endOfWeek, relativeTime } from "../lib/time";
 import {
   BalanceTiles,
   Empty,
@@ -30,7 +33,7 @@ import {
   IconActivity,
   IconAdjust,
   IconArrowRight,
-  IconBook,
+  IconChart,
   IconCheck,
   IconHome,
   IconInbox,
@@ -38,6 +41,7 @@ import {
   IconShield,
   IconUsers,
   IconX,
+  IconZap,
 } from "../components/icons";
 
 export default function OperatorConsole() {
@@ -90,6 +94,13 @@ export default function OperatorConsole() {
       icon: <IconActivity />,
       hint: "All postings across the household",
       render: () => <Activity nameFor={nameFor} />,
+    },
+    {
+      key: "charts",
+      label: "Charts",
+      icon: <IconChart />,
+      hint: "Household-wide trends and comparisons",
+      render: () => <HouseholdCharts />,
     },
     {
       key: "adjust",
@@ -233,7 +244,7 @@ function Approvals({
   return (
     <Panel
       title="Pending approvals"
-      sub="Each item is an authorization hold — approve to settle it, or decline to void it."
+      sub="Each item is an authorization hold — approve to settle it, decline to void it, or adjust the reward first."
     >
       <Notice err={err} />
       {pending.length === 0 ? (
@@ -244,38 +255,91 @@ function Approvals({
       ) : (
         <ul className="rows">
           {pending.map((t) => (
-            <li key={t.id} className="row">
-              <div>
-                <div className="row-title">{nameFor(t.account_id)}</div>
-                <div className="row-sub">
-                  {t.type === "earn" ? "Chore" : "Reward"} · {t.memo} ·{" "}
-                  {new Date(t.created_at).toLocaleDateString()}
-                </div>
-              </div>
-              <div className="row-right">
-                <Money
-                  minor={t.amount_minor}
-                  signed
-                  className={isCredit(t) ? "pos" : "neg"}
-                />
-                <button
-                  className="btn-primary sm"
-                  onClick={() => decide(() => api.settle(t.id))}
-                >
-                  <IconCheck width={15} height={15} /> Approve
-                </button>
-                <button
-                  className="btn-danger sm"
-                  onClick={() => decide(() => api.void(t.id))}
-                >
-                  <IconX width={15} height={15} /> Decline
-                </button>
-              </div>
-            </li>
+            <ApprovalRow
+              key={t.id}
+              t={t}
+              nameFor={nameFor}
+              onSettle={() => decide(() => api.settle(t.id))}
+              onVoid={() => decide(() => api.void(t.id))}
+              onAdjust={(amount) => decide(() => api.adjustReward(t.id, amount))}
+            />
           ))}
         </ul>
       )}
     </Panel>
+  );
+}
+
+function ApprovalRow({
+  t,
+  nameFor,
+  onSettle,
+  onVoid,
+  onAdjust,
+}: {
+  t: Transaction;
+  nameFor: (id: string) => string;
+  onSettle: () => void;
+  onVoid: () => void;
+  onAdjust: (amount: string) => void;
+}) {
+  const isCustomChore = t.type === "earn" && !t.task_id;
+  const [adjusting, setAdjusting] = useState(false);
+  const [amount, setAmount] = useState(coins(t.amount_minor));
+
+  return (
+    <li className="row">
+      <div>
+        <div className="row-title">
+          {nameFor(t.account_id)}{" "}
+          {isCustomChore && <span className="chip chip-bounty">proposed chore</span>}
+        </div>
+        <div className="row-sub">
+          {t.type === "earn" ? "Chore" : "Reward"} · {t.memo} ·{" "}
+          {new Date(t.created_at).toLocaleDateString()}
+        </div>
+        {adjusting && (
+          <div className="hint-line adjust-row">
+            <input
+              className="adjust-input"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.25"
+            />
+            <button
+              className="btn-primary sm"
+              onClick={() => {
+                onAdjust(amount);
+                setAdjusting(false);
+              }}
+            >
+              Save
+            </button>
+            <button className="btn-ghost sm" onClick={() => setAdjusting(false)}>
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="row-right">
+        <Money
+          minor={t.amount_minor}
+          signed
+          className={isCredit(t) ? "pos" : "neg"}
+        />
+        {t.type === "earn" && !adjusting && (
+          <button className="btn-ghost sm" onClick={() => setAdjusting(true)}>
+            <IconAdjust width={15} height={15} /> Adjust
+          </button>
+        )}
+        <button className="btn-primary sm" onClick={onSettle}>
+          <IconCheck width={15} height={15} /> Approve
+        </button>
+        <button className="btn-danger sm" onClick={onVoid}>
+          <IconX width={15} height={15} /> Decline
+        </button>
+      </div>
+    </li>
   );
 }
 
@@ -471,6 +535,12 @@ function AccountDetail({
       >
         <TransactionsPanel txs={txs} accountNameFor={() => account.name} />
       </Panel>
+      <div className="span-2">
+        <Inbox accountId={account.id} />
+      </div>
+      <div className="span-2">
+        <AccountCharts accountId={account.id} />
+      </div>
     </div>
   );
 }
@@ -661,6 +731,9 @@ function Chores() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const { err, run } = useError();
   const [form, setForm] = useState({ name: "", description: "", value: "" });
+  const [bountyErr, setBountyErr] = useState("");
+  const [bountyMsg, setBountyMsg] = useState("");
+  const [bountyForm, setBountyForm] = useState({ name: "", description: "", value: "", expiresAt: "" });
 
   const load = useCallback(async () => {
     const { tasks } = await api.listTasks();
@@ -681,17 +754,44 @@ function Chores() {
     );
   };
 
+  const submitBounty = async (e: FormEvent) => {
+    e.preventDefault();
+    setBountyErr("");
+    setBountyMsg("");
+    try {
+      await api.createTask(bountyForm.name, bountyForm.description, bountyForm.value, {
+        isBounty: true,
+        expiresAt: bountyForm.expiresAt ? new Date(bountyForm.expiresAt).toISOString() : undefined,
+      });
+      setBountyMsg(
+        bountyForm.expiresAt
+          ? `Posted "${bountyForm.name}" — it expires ${new Date(bountyForm.expiresAt).toLocaleString()}.`
+          : `Posted "${bountyForm.name}" — every kid will see it until one claims it.`,
+      );
+      setBountyForm({ name: "", description: "", value: "", expiresAt: "" });
+      load();
+    } catch (e) {
+      setBountyErr(e instanceof ApiError ? e.message : String(e));
+    }
+  };
+
+  // Bounties get their own history section so a flurry of one-off claims
+  // doesn't clog the everyday chore catalog.
+  const catalogTasks = tasks.filter((t) => !t.is_bounty);
+  const bountyTasks = tasks.filter((t) => t.is_bounty);
+
   return (
     <div className="grid-2">
       <Panel
+        className="span-2"
         title="Chore catalog"
         sub="What holders can earn. Retire a chore to hide it without deleting history."
       >
-        {tasks.length === 0 ? (
-          <Empty title="No chores yet." hint="Add one on the right." />
+        {catalogTasks.length === 0 ? (
+          <Empty title="No chores yet." hint="Add one below." />
         ) : (
           <ul className="rows">
-            {tasks.map((t) => (
+            {catalogTasks.map((t) => (
               <li key={t.id} className="row">
                 <div>
                   <div className="row-title">
@@ -720,6 +820,57 @@ function Chores() {
                 </div>
               </li>
             ))}
+          </ul>
+        )}
+      </Panel>
+      <Panel
+        className="span-2"
+        title="Bounty history"
+        sub="Every bounty you've posted — open, claimed, or expired."
+      >
+        {bountyTasks.length === 0 ? (
+          <Empty title="No bounties yet." hint="Post one below." />
+        ) : (
+          <ul className="rows">
+            {bountyTasks.map((t) => {
+              const expired = !!t.expires_at && new Date(t.expires_at) <= new Date();
+              const status = t.claimed_by ? "claimed" : expired ? "expired" : "open";
+              return (
+                <li key={t.id} className="row">
+                  <div>
+                    <div className="row-title">
+                      {t.name} <span className="chip chip-bounty">bounty · {status}</span>
+                      {!t.active && (
+                        <span className="chip chip-off">retired</span>
+                      )}
+                    </div>
+                    {t.description && (
+                      <div className="row-sub">{t.description}</div>
+                    )}
+                    {t.expires_at && (
+                      <div className="row-sub">
+                        {expired ? "Expired" : "Expires"} {new Date(t.expires_at).toLocaleString()} (
+                        {relativeTime(t.expires_at)})
+                      </div>
+                    )}
+                  </div>
+                  <div className="row-right">
+                    <Money minor={t.value_minor} signed className="pos" />
+                    <button
+                      className="btn-ghost sm"
+                      onClick={() =>
+                        run(
+                          () => api.updateTask(t.id, { active: !t.active }),
+                          load,
+                        )
+                      }
+                    >
+                      {t.active ? "Retire" : "Restore"}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </Panel>
@@ -753,6 +904,89 @@ function Chores() {
           </label>
           <Notice err={err} />
           <button className="btn-primary">Add chore</button>
+        </form>
+      </Panel>
+      <Panel
+        title="Post a bounty"
+        sub="A one-time opportunity — every kid sees it, first to claim it wins."
+      >
+        <form onSubmit={submitBounty} className="form">
+          <label className="field">
+            Name
+            <input
+              value={bountyForm.name}
+              onChange={(e) => setBountyForm({ ...bountyForm, name: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            Description
+            <input
+              value={bountyForm.description}
+              onChange={(e) =>
+                setBountyForm({ ...bountyForm, description: e.target.value })
+              }
+            />
+          </label>
+          <label className="field">
+            Value ({b.coin_name_plural}, e.g. 1.00)
+            <input
+              value={bountyForm.value}
+              onChange={(e) => setBountyForm({ ...bountyForm, value: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            Expires <span className="field-opt">optional — leave blank for no deadline</span>
+            <input
+              type="datetime-local"
+              value={bountyForm.expiresAt}
+              onChange={(e) => setBountyForm({ ...bountyForm, expiresAt: e.target.value })}
+            />
+          </label>
+          <div className="quick-dates">
+            <button
+              type="button"
+              className="btn-ghost sm"
+              onClick={() =>
+                setBountyForm({
+                  ...bountyForm,
+                  expiresAt: datetimeLocal(new Date(Date.now() + 2 * 60 * 60 * 1000)),
+                })
+              }
+            >
+              Within 2 hours
+            </button>
+            <button
+              type="button"
+              className="btn-ghost sm"
+              onClick={() =>
+                setBountyForm({ ...bountyForm, expiresAt: datetimeLocal(endOfDay(new Date())) })
+              }
+            >
+              End of day today
+            </button>
+            <button
+              type="button"
+              className="btn-ghost sm"
+              onClick={() =>
+                setBountyForm({ ...bountyForm, expiresAt: datetimeLocal(endOfWeek(new Date())) })
+              }
+            >
+              This week
+            </button>
+            {bountyForm.expiresAt && (
+              <button
+                type="button"
+                className="btn-ghost sm"
+                onClick={() => setBountyForm({ ...bountyForm, expiresAt: "" })}
+              >
+                <IconX width={14} height={14} /> Clear
+              </button>
+            )}
+          </div>
+          <Notice msg={bountyMsg} err={bountyErr} />
+          <button className="btn-primary">
+            <IconZap width={16} height={16} /> Post bounty
+          </button>
         </form>
       </Panel>
     </div>

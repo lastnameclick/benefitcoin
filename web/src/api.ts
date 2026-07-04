@@ -58,6 +58,10 @@ export interface Task {
   description: string;
   value_minor: number;
   active: boolean;
+  is_bounty: boolean;
+  claimed_by?: string;
+  claimed_at?: string;
+  expires_at?: string;
 }
 
 export type TxType = "earn" | "redeem" | "adjust_credit" | "adjust_debit";
@@ -93,6 +97,54 @@ export interface Customer {
   display_name: string;
   status: string;
   username?: string;
+}
+
+export interface BalancePoint {
+  bucket: string;
+  balance_minor: number;
+}
+
+export interface EarnRedeemBucket {
+  bucket: string;
+  earned_minor: number;
+  redeemed_minor: number;
+}
+
+export interface TaskLeaderboardEntry {
+  task_id: string;
+  task_name: string;
+  is_bounty: boolean;
+  count: number;
+  total_minor: number;
+}
+
+export interface FrequencyBucket {
+  bucket: number;
+  count: number;
+}
+
+export interface RedemptionFrequency {
+  by_hour: FrequencyBucket[];
+  by_weekday: FrequencyBucket[];
+  by_month: FrequencyBucket[];
+}
+
+export interface HolderSummary {
+  account_id: string;
+  customer_id: string;
+  display_name: string;
+  current_minor: number;
+  available_minor: number;
+  recent_tx_count: number;
+}
+
+export interface StatementMeta {
+  id: string;
+  account_id: string;
+  period: string;
+  generated_at: string;
+  emailed_at?: string;
+  viewed_at?: string;
 }
 
 export interface AuditEvent {
@@ -178,6 +230,32 @@ async function request<T>(method: string, path: string, body?: unknown, retry = 
   return data as T;
 }
 
+async function requestBlob(path: string, retry = true): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  const res = await fetch(`/api/v1${path}`, { headers });
+  if (res.status === 401 && retry) {
+    if (await tryRefresh()) return requestBlob(path, false);
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    const err = data?.error ?? { code: "error", message: res.statusText };
+    throw new ApiError(res.status, err.code, err.message);
+  }
+  return res.blob();
+}
+
+// downloadBlob triggers a browser "Save As" for a fetched file.
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export interface SignupInput {
   household_name: string;
   display_name: string;
@@ -205,19 +283,34 @@ export const api = {
     request<{ transactions: Transaction[] }>("GET", `/accounts/${id}/transactions`),
 
   listTasks: () => request<{ tasks: Task[] }>("GET", "/tasks"),
-  createTask: (name: string, description: string, value: string) =>
-    request<Task>("POST", "/tasks", { name, description, value }),
+  createTask: (
+    name: string,
+    description: string,
+    value: string,
+    opts?: { isBounty?: boolean; expiresAt?: string },
+  ) =>
+    request<Task>("POST", "/tasks", {
+      name,
+      description,
+      value,
+      is_bounty: opts?.isBounty ?? false,
+      expires_at: opts?.expiresAt || undefined,
+    }),
   updateTask: (id: string, patch: Partial<{ name: string; description: string; value: string; active: boolean }>) =>
     request<Task>("PATCH", `/tasks/${id}`, patch),
 
   submitEarning: (accountId: string, taskId: string) =>
     request<Transaction>("POST", `/accounts/${accountId}/earnings`, { task_id: taskId }),
+  proposeChore: (accountId: string, description: string, value: string) =>
+    request<Transaction>("POST", `/accounts/${accountId}/earnings/custom`, { description, value }),
   requestRedemption: (accountId: string) =>
     request<Transaction>("POST", `/accounts/${accountId}/redemptions`, {}),
   adjust: (
     accountId: string,
     body: { direction: "credit" | "debit"; amount: string; reason: string; occurred_at?: string; details?: Record<string, unknown> },
   ) => request<Transaction>("POST", `/accounts/${accountId}/adjustments`, body),
+  adjustReward: (transactionId: string, amount: string) =>
+    request<Transaction>("POST", `/transactions/${transactionId}/adjust`, { amount }),
 
   listCustomers: () => request<{ customers: Customer[] }>("GET", "/customers"),
   createCustomer: (type: string, display_name: string, username: string, password: string) =>
@@ -236,6 +329,28 @@ export const api = {
   void: (id: string) => request<Transaction>("POST", `/transactions/${id}/void`, {}),
 
   audit: () => request<{ events: AuditEvent[] }>("GET", "/audit"),
+
+  balanceHistory: (accountId: string, params?: string) =>
+    request<{ points: BalancePoint[] }>("GET", `/accounts/${accountId}/charts/balance-history${params ?? ""}`),
+  earnRedeemSummary: (accountId: string, params?: string) =>
+    request<{ buckets: EarnRedeemBucket[] }>("GET", `/accounts/${accountId}/charts/earn-redeem${params ?? ""}`),
+  redemptionFrequency: (accountId: string, params?: string) =>
+    request<RedemptionFrequency>("GET", `/accounts/${accountId}/charts/redemption-frequency${params ?? ""}`),
+  taskLeaderboard: (accountId: string, params?: string) =>
+    request<{ entries: TaskLeaderboardEntry[] }>("GET", `/accounts/${accountId}/charts/task-leaderboard${params ?? ""}`),
+  householdLeaderboard: (params?: string) =>
+    request<{ entries: TaskLeaderboardEntry[] }>("GET", `/tenant/charts/task-leaderboard${params ?? ""}`),
+  householdOverview: () => request<{ holders: HolderSummary[] }>("GET", "/tenant/charts/household-overview"),
+
+  downloadStatementPdf: async (accountId: string, period?: string) => {
+    const blob = await requestBlob(`/accounts/${accountId}/statement.pdf${period ? `?period=${period}` : ""}`);
+    downloadBlob(blob, `statement-${period ?? "current"}.pdf`);
+  },
+  listInbox: (accountId: string) => request<{ statements: StatementMeta[] }>("GET", `/accounts/${accountId}/inbox`),
+  downloadInboxStatement: async (accountId: string, statementId: string, period: string) => {
+    const blob = await requestBlob(`/accounts/${accountId}/inbox/${statementId}/pdf`);
+    downloadBlob(blob, `statement-${period}.pdf`);
+  },
 };
 
 // Format minor units (1000 = 1 coin) as a coin string.

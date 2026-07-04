@@ -56,3 +56,9 @@ export const IconInfo = (p: SVGProps<SVGSVGElement>) => (
 export const IconLogout = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><path d="M15 4h4v16h-4" /><path d="M10 12h9M15 8l4 4-4 4" /></Svg>
 );
+export const IconZap = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><path d="M13 3 4 14h6l-1 7 9-11h-6l1-7Z" /></Svg>
+);
+export const IconChart = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><path d="M4 20V10M11 20V4M18 20v-7" /><path d="M2 20h20" /></Svg>
+);
