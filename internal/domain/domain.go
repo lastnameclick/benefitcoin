@@ -201,3 +201,44 @@ type StatementMeta struct {
 	EmailedAt   *time.Time `json:"emailed_at,omitempty"`
 	ViewedAt    *time.Time `json:"viewed_at,omitempty"`
 }
+
+// NotificationType identifies what kind of event a Notification represents,
+// so the client can route/badge/deep-link it without parsing free text.
+type NotificationType string
+
+const (
+	NotifyRedemptionRequested NotificationType = "redemption.requested"
+	NotifyRedemptionDecided   NotificationType = "redemption.decided"
+	NotifyChoreSubmitted      NotificationType = "chore.submitted"
+	NotifyChoreDecided        NotificationType = "chore.decided"
+	NotifyBountyCreated       NotificationType = "bounty.created"
+	NotifyBountyClaimed       NotificationType = "bounty.claimed"
+	NotifyBountyExpiringSoon  NotificationType = "bounty.expiring_soon"
+	NotifyBountyExpired       NotificationType = "bounty.expired"
+	NotifyStatementReady      NotificationType = "statement.ready"
+)
+
+// Notification is one entry in an identity's in-app notification feed.
+type Notification struct {
+	ID         string           `json:"id"`
+	TenantID   string           `json:"tenant_id"`
+	IdentityID string           `json:"identity_id"`
+	Type       NotificationType `json:"type"`
+	Title      string           `json:"title"`
+	Body       string           `json:"body"`
+	Data       map[string]any   `json:"data,omitempty"`
+	CreatedAt  time.Time        `json:"created_at"`
+	ReadAt     *time.Time       `json:"read_at,omitempty"`
+}
+
+// PushSubscription is a browser's Web Push registration for one identity.
+type PushSubscription struct {
+	ID         string     `json:"id"`
+	TenantID   string     `json:"tenant_id"`
+	IdentityID string     `json:"identity_id"`
+	Endpoint   string     `json:"endpoint"`
+	P256dh     string     `json:"p256dh"`
+	Auth       string     `json:"auth"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}

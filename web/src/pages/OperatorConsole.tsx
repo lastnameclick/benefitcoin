@@ -19,6 +19,7 @@ import {
 import { useBranding } from "../branding";
 import { AccountCharts, HouseholdCharts, Inbox } from "../components/charts";
 import { DashboardShell, type Section } from "../components/DashboardShell";
+import { useNotifications } from "../notifications";
 import { datetimeLocal, endOfDay, endOfWeek, relativeTime } from "../lib/time";
 import {
   BalanceTiles,
@@ -59,6 +60,14 @@ export default function OperatorConsole() {
   useEffect(() => {
     loadShell().catch(() => {});
   }, [loadShell]);
+
+  // Live notifications (redemption/chore/bounty events) mean the pending
+  // count could be stale the instant they arrive — refresh rather than
+  // waiting for the next manual action or page load.
+  const { lastEvent } = useNotifications();
+  useEffect(() => {
+    if (lastEvent) loadShell().catch(() => {});
+  }, [lastEvent, loadShell]);
 
   const nameFor = useCallback(
     (id: string) => accounts.find((a) => a.id === id)?.name ?? "Account",
@@ -413,41 +422,43 @@ function Accounts({ onChange }: { onChange: () => void }) {
         {accounts.length === 0 ? (
           <Empty title="No accounts yet." hint="Open one on the right." />
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Holder</th>
-                <th>Account No.</th>
-                <th className="amt">Available</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {accounts.map((a) => {
-                const cust = customers.find((c) => c.id === a.customer_id);
-                return (
-                  <tr
-                    key={a.id}
-                    className="ledger-row"
-                    onClick={() => setSelected(a)}
-                    tabIndex={0}
-                    onKeyDown={(e) => e.key === "Enter" && setSelected(a)}
-                  >
-                    <td>{cust?.display_name ?? a.name}</td>
-                    <td className="mono muted">
-                      {a.id.slice(0, 8).toUpperCase()}
-                    </td>
-                    <td className="amt">
-                      <Money minor={a.balance?.available_minor ?? 0} />
-                    </td>
-                    <td className="go">
-                      <IconArrowRight width={16} height={16} />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Holder</th>
+                  <th>Account No.</th>
+                  <th className="amt">Available</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {accounts.map((a) => {
+                  const cust = customers.find((c) => c.id === a.customer_id);
+                  return (
+                    <tr
+                      key={a.id}
+                      className="ledger-row"
+                      onClick={() => setSelected(a)}
+                      tabIndex={0}
+                      onKeyDown={(e) => e.key === "Enter" && setSelected(a)}
+                    >
+                      <td>{cust?.display_name ?? a.name}</td>
+                      <td className="mono muted">
+                        {a.id.slice(0, 8).toUpperCase()}
+                      </td>
+                      <td className="amt">
+                        <Money minor={a.balance?.available_minor ?? 0} />
+                      </td>
+                      <td className="go">
+                        <IconArrowRight width={16} height={16} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </Panel>
 
@@ -1009,30 +1020,32 @@ function Audit() {
       {events.length === 0 ? (
         <Empty title="No events yet." />
       ) : (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Action</th>
-              <th>Entity</th>
-              <th>When</th>
-            </tr>
-          </thead>
-          <tbody>
-            {events.map((e) => (
-              <tr key={e.id}>
-                <td>
-                  <span className="chip">{e.action}</span>
-                </td>
-                <td className="mono muted">
-                  {e.entity_type}/{e.entity_id.slice(0, 8)}
-                </td>
-                <td className="muted nowrap">
-                  {new Date(e.created_at).toLocaleString()}
-                </td>
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Entity</th>
+                <th>When</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {events.map((e) => (
+                <tr key={e.id}>
+                  <td>
+                    <span className="chip">{e.action}</span>
+                  </td>
+                  <td className="mono muted">
+                    {e.entity_type}/{e.entity_id.slice(0, 8)}
+                  </td>
+                  <td className="muted nowrap">
+                    {new Date(e.created_at).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Panel>
   );

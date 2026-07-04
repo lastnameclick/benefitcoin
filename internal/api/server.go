@@ -5,12 +5,14 @@ package api
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"cpal/internal/auth"
 	"cpal/internal/config"
 	"cpal/internal/domain"
 	"cpal/internal/ledger"
+	"cpal/internal/notify"
 	"cpal/internal/store"
 
 	"github.com/go-chi/chi/v5"
@@ -19,14 +21,53 @@ import (
 )
 
 type Server struct {
-	cfg    config.Config
-	store  *store.Store
-	ledger *ledger.Ledger
-	auth   *auth.Manager
+	cfg      config.Config
+	store    *store.Store
+	ledger   *ledger.Ledger
+	auth     *auth.Manager
+	notifier *notify.Service
+
+	ticketMu sync.Mutex
+	tickets  map[string]streamTicket // one-time SSE connect tickets, see notifications.go
 }
 
-func NewServer(cfg config.Config, st *store.Store, lg *ledger.Ledger, am *auth.Manager) *Server {
-	return &Server{cfg: cfg, store: st, ledger: lg, auth: am}
+type streamTicket struct {
+	claims  auth.Claims
+	expires time.Time
+}
+
+func NewServer(cfg config.Config, st *store.Store, lg *ledger.Ledger, am *auth.Manager, nf *notify.Service) *Server {
+	return &Server{cfg: cfg, store: st, ledger: lg, auth: am, notifier: nf, tickets: make(map[string]streamTicket)}
+}
+
+// putStreamTicket stores a one-time SSE connect ticket, sweeping expired
+// entries opportunistically so the map doesn't grow unbounded.
+func (s *Server) putStreamTicket(ticket string, claims auth.Claims) {
+	s.ticketMu.Lock()
+	defer s.ticketMu.Unlock()
+	now := time.Now()
+	for k, v := range s.tickets {
+		if now.After(v.expires) {
+			delete(s.tickets, k)
+		}
+	}
+	s.tickets[ticket] = streamTicket{claims: claims, expires: now.Add(streamTicketTTL)}
+}
+
+// takeStreamTicket validates and consumes a ticket — each one connects at
+// most once.
+func (s *Server) takeStreamTicket(ticket string) (auth.Claims, bool) {
+	if ticket == "" {
+		return auth.Claims{}, false
+	}
+	s.ticketMu.Lock()
+	defer s.ticketMu.Unlock()
+	t, ok := s.tickets[ticket]
+	delete(s.tickets, ticket)
+	if !ok || time.Now().After(t.expires) {
+		return auth.Claims{}, false
+	}
+	return t.claims, true
 }
 
 // loadTenant fetches the caller's household. Writes a 500 and returns ok=false
@@ -48,7 +89,6 @@ func (s *Server) Routes() http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(s.cors)
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
@@ -63,12 +103,28 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/auth/refresh", s.handleRefresh)
 		r.Post("/auth/logout", s.handleLogout)
 
+		// The live notification stream authenticates via a short-lived ticket
+		// query param (EventSource can't set an Authorization header) and
+		// deliberately sits outside middleware.Timeout below — a 30s hard
+		// deadline would kill every long-lived SSE connection.
+		r.Get("/notifications/stream", s.handleNotificationStream)
+
 		// Authenticated endpoints.
 		r.Group(func(r chi.Router) {
+			r.Use(middleware.Timeout(30 * time.Second))
 			r.Use(s.auth.Middleware(writeErr))
 			r.Use(s.idempotency) // no-op for GETs / requests without the header
 
 			r.Get("/me", s.handleMe)
+
+			// Notifications (in-app feed) and Web Push subscriptions.
+			r.Get("/notifications", s.handleListNotifications)
+			r.Post("/notifications/{id}/read", s.handleMarkNotificationRead)
+			r.Post("/notifications/read-all", s.handleMarkAllNotificationsRead)
+			r.Get("/notifications/stream-token", s.handleNotificationStreamToken)
+			r.Get("/push/vapid-public-key", s.handleVapidPublicKey)
+			r.Post("/push/subscribe", s.handlePushSubscribe)
+			r.Delete("/push/subscribe", s.handlePushUnsubscribe)
 
 			// Accounts (holders see their own; operators see all).
 			r.Get("/accounts", s.handleListAccounts)
@@ -119,7 +175,7 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", s.cfg.CORSOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
 		w.Header().Set("Vary", "Origin")
 		if r.Method == http.MethodOptions {

@@ -104,38 +104,40 @@ export function Statement({
 }: { txs: Transaction[]; accountName?: (id: string) => string; onSelect: (t: Transaction) => void }) {
   if (txs.length === 0) return <Empty title="No transactions yet." hint="Postings will appear here as they happen." />;
   return (
-    <table className="ledger-table">
-      <thead>
-        <tr>
-          <th>Date</th>
-          {accountName && <th>Account</th>}
-          <th>Description</th>
-          <th className="amt">Amount</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {txs.map((t) => {
-          const credit = isCredit(t);
-          const when = t.effective_at ?? t.created_at;
-          const note = typeof t.details?.note === "string" ? (t.details.note as string) : "";
-          return (
-            <tr key={t.id} className="ledger-row" onClick={() => onSelect(t)} tabIndex={0}
-              onKeyDown={(e) => e.key === "Enter" && onSelect(t)}>
-              <td className="nowrap muted">{new Date(when).toLocaleDateString()}</td>
-              {accountName && <td className="muted">{accountName(t.account_id)}</td>}
-              <td>
-                <span className="entry-label">{txLabel(t)}</span>
-                <span className="entry-memo"> {t.memo}</span>
-                {note && <div className="entry-note">{note}</div>}
-              </td>
-              <td className={`amt ${credit ? "pos" : "neg"}`}><Money minor={t.amount_minor} signed /></td>
-              <td><StatusPill status={t.status} /></td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <div className="table-scroll">
+      <table className="ledger-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            {accountName && <th>Account</th>}
+            <th>Description</th>
+            <th className="amt">Amount</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {txs.map((t) => {
+            const credit = isCredit(t);
+            const when = t.effective_at ?? t.created_at;
+            const note = typeof t.details?.note === "string" ? (t.details.note as string) : "";
+            return (
+              <tr key={t.id} className="ledger-row" onClick={() => onSelect(t)} tabIndex={0}
+                onKeyDown={(e) => e.key === "Enter" && onSelect(t)}>
+                <td className="nowrap muted">{new Date(when).toLocaleDateString()}</td>
+                {accountName && <td className="muted">{accountName(t.account_id)}</td>}
+                <td>
+                  <span className="entry-label">{txLabel(t)}</span>
+                  <span className="entry-memo"> {t.memo}</span>
+                  {note && <div className="entry-note">{note}</div>}
+                </td>
+                <td className={`amt ${credit ? "pos" : "neg"}`}><Money minor={t.amount_minor} signed /></td>
+                <td><StatusPill status={t.status} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

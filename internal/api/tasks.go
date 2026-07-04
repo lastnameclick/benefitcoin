@@ -93,6 +93,11 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), actor.IdentityID, action, "task", task.ID,
 		map[string]any{"name": task.Name, "value_minor": task.ValueMinor, "is_bounty": task.IsBounty, "expires_at": expiresAt})
+	if task.IsBounty {
+		s.notifier.NotifyHolders(r.Context(), actor.TenantID, domain.NotifyBountyCreated,
+			"New bounty available", task.Name+" is now available to claim.",
+			map[string]any{"task_id": task.ID})
+	}
 	writeJSON(w, http.StatusCreated, task)
 }
 

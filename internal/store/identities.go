@@ -54,9 +54,18 @@ func (s *Store) ListIdentitiesByRole(ctx context.Context, tenantID string, role 
 	return out, rows.Err()
 }
 
-func (s *Store) scanIdentity(ctx context.Context, query string, arg any) (domain.Identity, error) {
+// GetIdentityByCustomer finds the identity belonging to a customer (each
+// customer has exactly one login) — used to resolve a notification recipient
+// from an account or bounty claim, both of which reference a customer id.
+func (s *Store) GetIdentityByCustomer(ctx context.Context, tenantID, customerID string) (domain.Identity, error) {
+	return s.scanIdentity(ctx, `
+		SELECT id, tenant_id, customer_id, username, password_hash, role, created_at
+		FROM identities WHERE tenant_id=$1 AND customer_id=$2 LIMIT 1`, tenantID, customerID)
+}
+
+func (s *Store) scanIdentity(ctx context.Context, query string, args ...any) (domain.Identity, error) {
 	var i domain.Identity
-	err := s.pool.QueryRow(ctx, query, arg).Scan(
+	err := s.pool.QueryRow(ctx, query, args...).Scan(
 		&i.ID, &i.TenantID, &i.CustomerID, &i.Username, &i.PasswordHash, &i.Role, &i.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return i, ErrNotFound

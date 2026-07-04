@@ -20,6 +20,7 @@ import (
 	"cpal/internal/auth"
 	"cpal/internal/config"
 	"cpal/internal/ledger"
+	"cpal/internal/notify"
 	"cpal/internal/store"
 )
 
@@ -142,7 +143,8 @@ func TestEndToEnd(t *testing.T) {
 	defer lg.Close()
 
 	am := auth.NewManager(cfg.JWTSecret, cfg.AccessTTL, cfg.RefreshTTL)
-	srv := api.NewServer(cfg, st, lg, am)
+	nf := notify.New(st, cfg.Push)
+	srv := api.NewServer(cfg, st, lg, am, nf)
 	ts := httptest.NewServer(srv.Routes())
 	defer ts.Close()
 	c := &apiClient{t: t, base: ts.URL, http: ts.Client()}

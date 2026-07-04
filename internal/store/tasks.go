@@ -130,3 +130,63 @@ func (s *Store) RetireExpiredBounties(ctx context.Context, tenantID string) ([]s
 	}
 	return ids, rows.Err()
 }
+
+// RetireExpiredBountiesDetailed is RetireExpiredBounties, but returns the full
+// task rows (not just ids) — used by the notification sweep, which needs
+// claimed_by to decide who (if anyone) to alert about the expiry.
+func (s *Store) RetireExpiredBountiesDetailed(ctx context.Context, tenantID string) ([]domain.Task, error) {
+	rows, err := s.pool.Query(ctx, `
+		UPDATE tasks SET active = false
+		WHERE tenant_id=$1 AND is_bounty AND active
+		  AND expires_at IS NOT NULL AND expires_at <= now()
+		RETURNING id, tenant_id, name, description, value_minor, active, is_bounty, claimed_by, claimed_at, expires_at, created_at`,
+		tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Task
+	for rows.Next() {
+		var t domain.Task
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.Name, &t.Description, &t.ValueMinor, &t.Active, &t.IsBounty,
+			&t.ClaimedBy, &t.ClaimedAt, &t.ExpiresAt, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// ListBountiesExpiringSoon returns unclaimed, active bounties whose deadline
+// falls within the given window and that haven't already been flagged, so a
+// periodic sweep can send a one-time "expiring soon" alert.
+func (s *Store) ListBountiesExpiringSoon(ctx context.Context, tenantID string, within time.Duration) ([]domain.Task, error) {
+	rows, err := s.pool.Query(ctx, taskSelect+`
+		WHERE tenant_id=$1 AND is_bounty AND active AND claimed_by IS NULL
+		  AND expiring_notified_at IS NULL
+		  AND expires_at IS NOT NULL AND expires_at > now() AND expires_at <= now() + $2::interval`,
+		tenantID, within)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Task
+	for rows.Next() {
+		var t domain.Task
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.Name, &t.Description, &t.ValueMinor, &t.Active, &t.IsBounty,
+			&t.ClaimedBy, &t.ClaimedAt, &t.ExpiresAt, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// MarkBountyExpiringNotified flags a bounty as having already sent its
+// "expiring soon" alert, so the sweep doesn't repeat it on every tick.
+func (s *Store) MarkBountyExpiringNotified(ctx context.Context, tenantID, taskID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tasks SET expiring_notified_at = now() WHERE id=$1 AND tenant_id=$2`,
+		taskID, tenantID)
+	return err
+}

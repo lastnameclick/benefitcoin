@@ -1,4 +1,4 @@
-.PHONY: tb pg up down logs api web build statement-job seed test test-integration tidy reset fmt
+.PHONY: tb pg up down logs api web build statement-job seed vapid-keys test test-integration tidy reset fmt
 
 # Container engine for Postgres. Override with `make COMPOSE="docker compose"`.
 COMPOSE ?= podman compose
@@ -58,11 +58,17 @@ statement-job:
 seed:
 	go run ./cmd/seed
 
+# Print a fresh VAPID keypair for Web Push — paste into VAPID_PUBLIC_KEY /
+# VAPID_PRIVATE_KEY in .env. Optional: without it, push notifications are
+# skipped and the in-app notification feed still works on its own.
+vapid-keys:
+	go run ./cmd/vapid-keys
+
 # --- tests ---------------------------------------------------------------
 
 # Unit tests, no infra required.
 test:
-	go test ./internal/money/... ./internal/auth/...
+	go test ./internal/money/... ./internal/auth/... ./internal/notify/... ./internal/config/...
 
 # Full end-to-end test (needs `make pg` + `make tb`).
 test-integration:
