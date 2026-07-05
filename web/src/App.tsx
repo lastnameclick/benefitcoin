@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth";
+import { NotificationsProvider } from "./notifications";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -30,5 +31,9 @@ function GuestOnly({ children }: { children: React.ReactNode }) {
 function AppShell() {
   const { session } = useAuth();
   if (!session) return <Navigate to="/login" replace />;
-  return session.role === "operator" ? <OperatorConsole /> : <HolderPortal />;
+  return (
+    <NotificationsProvider>
+      {session.role === "operator" ? <OperatorConsole /> : <HolderPortal />}
+    </NotificationsProvider>
+  );
 }

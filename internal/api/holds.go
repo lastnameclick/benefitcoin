@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -85,6 +86,15 @@ func (s *Server) handleCreateEarning(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), actor.IdentityID, action, "transaction", tx.ID,
 		map[string]any{"account_id": acct.ID, "task_id": task.ID, "amount_minor": task.ValueMinor})
+	if task.IsBounty {
+		s.notifier.NotifyOperators(r.Context(), actor.TenantID, domain.NotifyBountyClaimed,
+			"Bounty claimed", task.Name+" was claimed and is awaiting your review.",
+			map[string]any{"transaction_id": tx.ID, "task_id": task.ID})
+	} else {
+		s.notifier.NotifyOperators(r.Context(), actor.TenantID, domain.NotifyChoreSubmitted,
+			task.Name+" submitted", "A chore was submitted for verification.",
+			map[string]any{"transaction_id": tx.ID, "task_id": task.ID})
+	}
 	writeJSON(w, http.StatusCreated, tx)
 }
 
@@ -138,6 +148,9 @@ func (s *Server) handleProposeChore(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r.Context(), actor.IdentityID, "chore_proposal.create", "transaction", tx.ID,
 		map[string]any{"account_id": acct.ID, "amount_minor": valueMinor, "description": desc})
+	s.notifier.NotifyOperators(r.Context(), actor.TenantID, domain.NotifyChoreSubmitted,
+		"Chore proposed", desc+" was proposed for verification.",
+		map[string]any{"transaction_id": tx.ID})
 	writeJSON(w, http.StatusCreated, tx)
 }
 
@@ -239,6 +252,9 @@ func (s *Server) handleCreateRedemption(w http.ResponseWriter, r *http.Request) 
 	}
 	s.audit(r.Context(), actor.IdentityID, "redemption.request", "transaction", tx.ID,
 		map[string]any{"account_id": acct.ID, "amount_minor": amount})
+	s.notifier.NotifyOperators(r.Context(), actor.TenantID, domain.NotifyRedemptionRequested,
+		"Redemption requested", "A new redemption request is awaiting your review.",
+		map[string]any{"transaction_id": tx.ID, "account_id": acct.ID})
 	writeJSON(w, http.StatusCreated, tx)
 }
 
@@ -302,7 +318,36 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, settle bool) {
 	}
 	s.audit(r.Context(), actor.IdentityID, action, "transaction", tx.ID,
 		map[string]any{"amount_minor": tx.AmountMinor, "type": tx.Type})
+	s.notifyDecision(r.Context(), tx, settle)
 
 	updated, _ := s.store.GetTransaction(r.Context(), actor.TenantID, tx.ID)
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// notifyDecision alerts the holder whose transaction was just settled or
+// voided — wording depends on whether it was a chore/bounty earning or a
+// redemption. Best-effort: a failure to resolve the recipient never fails
+// the caller's settle/void request.
+func (s *Server) notifyDecision(ctx context.Context, tx domain.Transaction, settle bool) {
+	acct, err := s.store.GetAccount(ctx, tx.TenantID, tx.AccountID)
+	if err != nil || acct.CustomerID == nil {
+		return
+	}
+	verb := "approved"
+	if !settle {
+		verb = "declined"
+	}
+	if tx.Type == domain.TxRedeem {
+		s.notifier.NotifyCustomer(ctx, tx.TenantID, *acct.CustomerID, domain.NotifyRedemptionDecided,
+			"Redemption "+verb, "Your redemption request was "+verb+".",
+			map[string]any{"transaction_id": tx.ID})
+		return
+	}
+	what := tx.Memo
+	if what == "" {
+		what = "Your chore"
+	}
+	s.notifier.NotifyCustomer(ctx, tx.TenantID, *acct.CustomerID, domain.NotifyChoreDecided,
+		"Chore "+verb, what+" was "+verb+".",
+		map[string]any{"transaction_id": tx.ID})
 }

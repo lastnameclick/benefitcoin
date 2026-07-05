@@ -9,7 +9,9 @@ the way a real bank core is structured — as a learning project — and runs as
 - **Postgres** is the **metadata system-of-record** (tenants, customers, logins, accounts directory,
   task catalog, transaction envelopes, idempotency keys, audit log).
 - A **Go** JSON API backend (`/api/v1`) and a separate **React** SPA frontend (marketing landing page +
-  self-serve signup + operator/holder apps).
+  self-serve signup + operator/holder apps), installable as a **PWA** with real-time notifications
+  (redemption requests, chore verification, bounty alerts, monthly statements) via Server-Sent Events
+  and Web Push.
 
 ## Core-banking concepts
 
@@ -35,8 +37,15 @@ Money never goes negative and can't be double-spent: customer accounts carry Tig
 
 ## Configuration
 
-See `.env.example`. Defaults match `docker-compose.yml`. Key vars: `DATABASE_URL`, `TB_ADDRESS`,
-`JWT_SECRET`. There is no seeded operator — households are created via self-serve signup.
+Copy `.env.example` to `.env` and adjust as needed — it's loaded automatically from the working
+directory (falling back to real env vars if both are set, e.g. in a container). Defaults match
+`docker-compose.yml`. Key vars: `DATABASE_URL`, `TB_ADDRESS`, `JWT_SECRET`. There is no seeded
+operator — households are created via self-serve signup.
+
+**Notifications.** The in-app notification bell and live (SSE) updates always work with zero setup.
+Web Push (real OS-level notifications, including when the app isn't open) is optional: run
+`make vapid-keys` and set `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` to enable it — same
+best-effort philosophy as statement emailing (`SMTP_*`).
 
 **White-label branding.** The SaaS operator can rebrand the whole product with env vars —
 `PRODUCT_NAME`, `SITE_NAME`, `COIN_NAME`, `COIN_NAME_PLURAL`, and `COIN_CODE`. These are display-only
@@ -49,7 +58,7 @@ it doubles as a teaching tool.
 ## Tests
 
 ```bash
-make test               # unit tests (money, auth) — no infra needed
+make test               # unit tests (money, auth, notify, config) — no infra needed
 
 # full end-to-end test (HTTP + Postgres + TigerBeetle): start infra first
 make pg                 # terminal A
@@ -78,4 +87,7 @@ POST /api/v1/customers   GET /api/v1/customers[/{id}]           # operator onboa
 GET  /api/v1/transactions?status=pending                       # operator work queue
 POST /api/v1/transactions/{id}/settle | /void                  # operator approves/rejects
 GET  /api/v1/audit                                             # operator audit log
+GET  /api/v1/notifications                                     # in-app feed + unread count
+GET  /api/v1/notifications/stream                               # live updates (Server-Sent Events)
+POST /api/v1/push/subscribe   DELETE /api/v1/push/subscribe    # Web Push subscription management
 ```

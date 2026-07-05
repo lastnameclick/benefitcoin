@@ -33,13 +33,19 @@ func (s *Store) GetTenant(ctx context.Context, id string) (domain.Tenant, error)
 	return t, err
 }
 
-// ListActiveTenants returns every active household, for the monthly statement
-// job to iterate.
+// ListActiveTenants returns every active, fully-onboarded household (one
+// whose GL accounts were wired up at signup), for the monthly statement job
+// and the notification sweep to iterate. Excludes the legacy default
+// household migration 0003 seeds for pre-multi-tenant data — on a fresh
+// database it never gets real GL accounts, so its issuance/redemption
+// account ids stay NULL.
 func (s *Store) ListActiveTenants(ctx context.Context) ([]domain.Tenant, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, name, status, issuance_account_id, redemption_account_id,
 		       issuance_tb_id, redemption_tb_id, created_at
-		FROM tenants WHERE status='active' ORDER BY created_at`)
+		FROM tenants
+		WHERE status='active' AND issuance_account_id IS NOT NULL AND redemption_account_id IS NOT NULL
+		ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}

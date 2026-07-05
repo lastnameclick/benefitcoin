@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // Config holds all runtime settings for the API server.
@@ -30,7 +32,23 @@ type Config struct {
 	// on top of the in-app Inbox, which always works with zero mail setup. An
 	// empty Host means "not configured" — the statement job just skips sending.
 	SMTP SMTPConfig
+
+	// Push is optional: Web Push is a best-effort enhancement on top of the
+	// in-app notification feed, which always works with zero VAPID setup. An
+	// empty PublicKey means "not configured" — subscriptions are simply never
+	// sent to.
+	Push PushConfig
 }
+
+// PushConfig holds VAPID credentials for Web Push notifications.
+type PushConfig struct {
+	PublicKey  string
+	PrivateKey string
+	Subject    string // "mailto:" address or URL identifying the sender, per the VAPID spec
+}
+
+// Configured reports whether Web Push has been set up for this deployment.
+func (c PushConfig) Configured() bool { return c.PublicKey != "" && c.PrivateKey != "" }
 
 // SMTPConfig holds outbound mail settings for monthly statement emails.
 type SMTPConfig struct {
@@ -53,8 +71,14 @@ type Branding struct {
 	CoinCode       string `json:"coin_code"`        // short ticker shown next to amounts, e.g. "BNC"
 }
 
-// Load reads configuration from the environment, applying dev-friendly defaults.
+// Load reads configuration from the environment, applying dev-friendly
+// defaults. It first loads a .env file from the working directory if one
+// exists — convenient for local dev (`make api` et al. run from the repo
+// root) — without overriding variables already set in the real environment
+// (e.g. in a container or CI). A missing .env file is not an error.
 func Load() (Config, error) {
+	_ = godotenv.Load()
+
 	c := Config{
 		Addr:        env("ADDR", ":8080"),
 		DatabaseURL: env("DATABASE_URL", "postgres://cpal:cpal@localhost:5432/cpal?sslmode=disable"),
@@ -97,6 +121,12 @@ func Load() (Config, error) {
 			return c, fmt.Errorf("SMTP_PORT: %w", err)
 		}
 		c.SMTP.Port = port
+	}
+
+	c.Push = PushConfig{
+		PublicKey:  env("VAPID_PUBLIC_KEY", ""),
+		PrivateKey: env("VAPID_PRIVATE_KEY", ""),
+		Subject:    env("VAPID_SUBJECT", "mailto:admin@localhost"),
 	}
 	return c, nil
 }

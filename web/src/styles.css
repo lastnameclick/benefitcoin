@@ -242,19 +242,22 @@ button.danger:hover { background: var(--debit); color: var(--sheet); }
   --sidebar-text: #aeb9c7;
 
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: 248px 1fr;
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
+  overflow-x: hidden; /* clip any wide child (tables, wide rows) instead of widening the whole page */
 }
 
 /* --- sidebar --- */
+/* Fixed (not sticky) so it's pinned to the viewport unconditionally — sticky
+   is sensitive to ancestor overflow/containing-block quirks (a scoped
+   `overflow-x: hidden` above is enough to trip it up), fixed isn't. */
 .sidebar {
   background: var(--sidebar);
   color: var(--sidebar-text);
   display: flex; flex-direction: column;
-  position: sticky; top: 0; height: 100vh;
+  position: fixed; top: 0; left: 0; width: 248px; height: 100vh;
+  z-index: 30;
   padding: 18px 14px;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 6px 8px 18px; }
@@ -287,15 +290,54 @@ button.danger:hover { background: var(--debit); color: var(--sheet); }
 .icon-btn:hover { background: #ffffff18; opacity: 1; }
 
 /* --- main column --- */
-.main { min-width: 0; display: flex; flex-direction: column; }
+.main { min-width: 0; display: flex; flex-direction: column; margin-left: 248px; }
 .topbar {
-  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  display: flex; align-items: center; gap: 12px;
   padding: 20px 32px; background: var(--surface); border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 5;
 }
-.page-title { font-family: var(--serif); font-size: 1.5rem; margin: 0; color: var(--text); letter-spacing: -0.01em; }
-.page-hint { margin: 2px 0 0; font-size: 0.85rem; color: var(--muted); }
-.env-chip { font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--warn); background: #fdf6e3; border: 1px solid #f0e2bd; padding: 4px 10px; border-radius: 999px; }
+.topbar-title { flex: 1; min-width: 0; }
+.page-title {
+  font-family: var(--serif); font-size: 1.5rem; margin: 0; color: var(--text); letter-spacing: -0.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.page-hint { margin: 2px 0 0; font-size: 0.85rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-right { display: flex; align-items: center; gap: 10px; flex: none; }
+.env-chip { font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--warn); background: #fdf6e3; border: 1px solid #f0e2bd; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+.menu-btn { display: none; flex: none; }
+.sidebar-close { display: none; }
+
+/* --- notification bell --- */
+.topbar-right .icon-btn { color: var(--muted); opacity: 1; }
+.topbar-right .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+.notif-bell { position: relative; }
+.notif-badge {
+  position: absolute; top: 0; right: 0; transform: translate(35%, -35%);
+  background: var(--neg); color: #fff; font-size: 0.62rem; font-weight: 700;
+  min-width: 17px; height: 17px; border-radius: 999px; display: grid; place-items: center;
+  padding: 0 4px; border: 2px solid var(--surface);
+}
+.notif-dropdown {
+  position: absolute; top: calc(100% + 10px); right: 0; width: 340px; max-width: 90vw;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 20px 45px -20px rgba(16,21,31,0.45); z-index: 20; overflow: hidden;
+}
+.notif-dropdown-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 14px; border-bottom: 1px solid var(--line); font-size: 0.85rem; font-weight: 600;
+}
+.notif-mark-all { font-size: 0.76rem; font-weight: 500; color: var(--brand-ink); background: none; border: none; padding: 0; }
+.notif-mark-all:hover { text-decoration: underline; }
+.notif-empty { padding: 24px 16px; font-size: 0.85rem; color: var(--muted); text-align: center; }
+.notif-list { max-height: 360px; overflow-y: auto; }
+.notif-item { padding: 11px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover { background: var(--surface-2); }
+.notif-item.is-unread { background: var(--brand-tint); }
+.notif-item.is-unread:hover { background: #dcf0e9; }
+.notif-item-title { font-size: 0.86rem; font-weight: 600; }
+.notif-item-body { font-size: 0.82rem; color: var(--text-2); color: #4a5462; margin-top: 2px; }
+.notif-item-time { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
 .app .content { width: 100%; min-width: 0; padding: 28px 16px 60px; max-width: 1400px; margin: 0 auto; box-sizing: border-box; }
 
 /* --- panels & grid --- */
@@ -303,8 +345,8 @@ button.danger:hover { background: var(--debit); color: var(--sheet); }
 .grid-2 .span-2 { grid-column: 1 / -1; }
 @media (max-width: 960px) { .grid-2 { grid-template-columns: 1fr; } }
 
-.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; box-shadow: 0 1px 2px rgba(16,21,31,0.04), 0 12px 28px -24px rgba(16,21,31,0.5); }
-.panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; box-shadow: 0 1px 2px rgba(16,21,31,0.04), 0 12px 28px -24px rgba(16,21,31,0.5); max-width: 100%; overflow-x: hidden; }
+.panel-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px 16px; margin-bottom: 16px; }
 .panel-head h2 { font-family: var(--serif); font-size: 1.15rem; margin: 0; }
 .panel-sub { margin: 3px 0 0; font-size: 0.85rem; color: var(--muted); }
 
@@ -388,6 +430,9 @@ button.danger:hover { background: var(--debit); color: var(--sheet); }
 .row-right { display: flex; align-items: center; gap: 12px; }
 
 /* --- tables --- */
+/* Wraps wide tables so they scroll horizontally within their own box instead
+   of forcing the whole page wider than the viewport. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -2px; }
 .data-table, .ledger-table { width: 100%; border-collapse: collapse; }
 .data-table th, .ledger-table th { text-align: left; font-size: 0.68rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line-2); }
 .data-table td, .ledger-table td { padding: 11px 10px; border-bottom: 1px solid var(--line); font-size: 0.9rem; vertical-align: middle; }
@@ -485,17 +530,51 @@ button.danger:hover { background: var(--debit); color: var(--sheet); }
 .gloss-item dt { font-weight: 600; font-size: 0.95rem; margin-bottom: 4px; }
 .gloss-item dd { margin: 0; font-size: 0.86rem; color: #4a5462; line-height: 1.55; }
 
-/* --- responsive sidebar --- */
-@media (max-width: 720px) {
-  .app { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .brand { padding: 6px 8px; }
-  .nav { flex-direction: row; flex-wrap: wrap; flex: 1; }
-  .nav-item { width: auto; }
-  .nav-item.is-active { box-shadow: inset 0 -3px 0 var(--brand); }
-  .side-foot { flex-direction: row; align-items: center; border-top: none; padding-top: 0; width: 100%; }
-  .app .content { padding: 20px 16px 48px; }
-  .topbar { padding: 16px; }
+/* --- responsive sidebar: an off-canvas drawer below 880px --- */
+body.scroll-lock { overflow: hidden; }
+
+@media (max-width: 880px) {
+  .main { margin-left: 0; }
+
+  .menu-btn { display: inline-flex; }
+  .sidebar-close { display: inline-flex; margin-left: auto; color: var(--sidebar-text); }
+  .sidebar-close:hover { background: #ffffff18; color: #fff; }
+
+  .sidebar {
+    width: 272px; max-width: 82vw;
+    transform: translateX(-100%); transition: transform 0.22s ease;
+    z-index: 50; box-shadow: 24px 0 48px -24px rgba(0,0,0,0.5);
+  }
+  .sidebar.is-open { transform: translateX(0); }
+  .sidebar-scrim {
+    position: fixed; inset: 0; background: rgba(8,12,20,0.5); z-index: 45;
+    animation: fade 0.14s ease;
+  }
+
+  .app .content { padding: 18px 14px 48px; }
+  .topbar { padding: 14px 16px; gap: 10px; }
+  .page-title { font-size: 1.25rem; }
+  .env-chip { display: none; } /* decorative; the topbar is tight enough without it */
+}
+
+@media (max-width: 480px) {
+  .panel { padding: 16px; border-radius: 12px; }
+  .stat-row { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row { flex-wrap: wrap; row-gap: 8px; }
+  .row-right { width: 100%; justify-content: space-between; }
+
+  /* A title + action button on one line is what was overflowing off-screen
+     (e.g. "Redeem a reward") — stack them and let the button take full width. */
+  .panel-head { flex-direction: column; align-items: stretch; }
+  .panel-head > *:last-child:not(:first-child) { width: 100%; }
+  .panel-head .btn-primary, .panel-head .btn-ghost, .panel-head .btn-danger { width: 100%; justify-content: center; }
+}
+
+/* Comfortable tap targets on touch devices (~44px per platform guidelines). */
+@media (max-width: 880px), (pointer: coarse) {
+  .icon-btn { padding: 10px; }
+  .nav-item { padding: 12px 11px; font-size: 0.95rem; }
+  .app .btn-primary, .app .btn-ghost, .app .btn-danger { padding: 11px 16px; }
 }
 
 /* --- charts --- */

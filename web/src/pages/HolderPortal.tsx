@@ -15,6 +15,7 @@ import { useBranding } from "../branding";
 import { AccountCharts, Inbox } from "../components/charts";
 import { DashboardShell, type Section } from "../components/DashboardShell";
 import { relativeTime } from "../lib/time";
+import { useNotifications } from "../notifications";
 import {
   BalanceTiles,
   Empty,
@@ -61,6 +62,14 @@ export default function HolderPortal() {
   useEffect(() => {
     load().catch((e) => setErr(String(e)));
   }, [load]);
+
+  // Live notifications (a chore/redemption decision, a new bounty, a
+  // statement) mean the account/tasks data could be stale the instant they
+  // arrive — refresh rather than waiting for the next action or page load.
+  const { lastEvent } = useNotifications();
+  useEffect(() => {
+    if (lastEvent) load().catch(() => {});
+  }, [lastEvent, load]);
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     setMsg("");

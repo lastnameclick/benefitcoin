@@ -147,6 +147,27 @@ export interface StatementMeta {
   viewed_at?: string;
 }
 
+export type NotificationType =
+  | "redemption.requested"
+  | "redemption.decided"
+  | "chore.submitted"
+  | "chore.decided"
+  | "bounty.created"
+  | "bounty.claimed"
+  | "bounty.expiring_soon"
+  | "bounty.expired"
+  | "statement.ready";
+
+export interface AppNotification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+  created_at: string;
+  read_at?: string;
+}
+
 export interface AuditEvent {
   id: string;
   actor_identity_id?: string;
@@ -351,6 +372,17 @@ export const api = {
     const blob = await requestBlob(`/accounts/${accountId}/inbox/${statementId}/pdf`);
     downloadBlob(blob, `statement-${period}.pdf`);
   },
+
+  listNotifications: () =>
+    request<{ notifications: AppNotification[]; unread_count: number }>("GET", "/notifications"),
+  markNotificationRead: (id: string) => request<{ status: string }>("POST", `/notifications/${id}/read`, {}),
+  markAllNotificationsRead: () => request<{ status: string }>("POST", "/notifications/read-all", {}),
+  notificationStreamToken: () =>
+    request<{ ticket: string; expires_in: number }>("GET", "/notifications/stream-token"),
+
+  vapidPublicKey: () => request<{ public_key: string }>("GET", "/push/vapid-public-key"),
+  pushSubscribe: (sub: PushSubscriptionJSON) => request<{ status: string }>("POST", "/push/subscribe", sub),
+  pushUnsubscribe: (endpoint: string) => request<{ status: string }>("DELETE", "/push/subscribe", { endpoint }),
 };
 
 // Format minor units (1000 = 1 coin) as a coin string.

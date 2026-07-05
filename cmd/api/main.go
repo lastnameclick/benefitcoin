@@ -15,8 +15,13 @@ import (
 	"cpal/internal/auth"
 	"cpal/internal/config"
 	"cpal/internal/ledger"
+	"cpal/internal/notify"
 	"cpal/internal/store"
 )
+
+// bountySweepInterval is how often the background sweep checks for bounties
+// expiring soon or already past their deadline.
+const bountySweepInterval = time.Minute
 
 func main() {
 	if err := run(); err != nil {
@@ -53,7 +58,27 @@ func run() error {
 	log.Println("tigerbeetle connected")
 
 	am := auth.NewManager(cfg.JWTSecret, cfg.AccessTTL, cfg.RefreshTTL)
-	srv := api.NewServer(cfg, st, lg, am)
+	nf := notify.New(st, cfg.Push)
+	if !cfg.Push.Configured() {
+		log.Println("VAPID keys not configured — push notifications disabled, in-app feed still works")
+	}
+	srv := api.NewServer(cfg, st, lg, am, nf)
+
+	// Periodic bounty sweep: warns holders about bounties expiring soon and
+	// retires (with a notification) any that already expired. Runs in-process
+	// since there's no separate job runner for anything this frequent.
+	go func() {
+		ticker := time.NewTicker(bountySweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				nf.SweepBounties(ctx)
+			}
+		}
+	}()
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,

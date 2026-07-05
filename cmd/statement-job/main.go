@@ -17,6 +17,7 @@ import (
 	"cpal/internal/domain"
 	"cpal/internal/ledger"
 	"cpal/internal/mail"
+	"cpal/internal/notify"
 	"cpal/internal/statement"
 	"cpal/internal/store"
 )
@@ -53,6 +54,7 @@ func run() error {
 	if !emailEnabled {
 		log.Println("SMTP not configured — statements will be generated to the Inbox only")
 	}
+	nf := notify.New(st, cfg.Push)
 
 	period := time.Now().UTC().AddDate(0, -1, 0) // the just-completed calendar month
 	deps := statement.Deps{Store: st, Cfg: cfg}
@@ -89,6 +91,12 @@ func run() error {
 				continue
 			}
 			generated++
+			if acct.CustomerID != nil {
+				month := period.Format("January 2006")
+				nf.NotifyCustomer(ctx, tenant.ID, *acct.CustomerID, domain.NotifyStatementReady,
+					"Statement ready", fmt.Sprintf("%s's %s statement is ready.", holder, month),
+					map[string]any{"account_id": acct.ID, "period": period.Format("2006-01")})
+			}
 
 			if recipient == "" {
 				continue
