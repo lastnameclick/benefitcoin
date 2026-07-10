@@ -535,3 +535,171 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("expected 404 for cross-tenant settle, got %d", stX)
 	}
 }
+
+// TestFlashSaleRedemption covers operator-scheduled, time-boxed discounts on
+// redemptions: percent-off and fixed-amount-off pricing, that overlapping
+// windows are rejected, and that the price reverts to normal once a sale is
+// canceled or its window elapses.
+func TestFlashSaleRedemption(t *testing.T) {
+	if os.Getenv("CPAL_INTEGRATION") == "" {
+		t.Skip("set CPAL_INTEGRATION=1 (and run `make up`) to run the integration test")
+	}
+	ctx := context.Background()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		t.Fatalf("postgres: %v", err)
+	}
+	defer st.Close()
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lg, err := ledger.Connect(cfg.TBClusterID, []string{cfg.TBAddress})
+	if err != nil {
+		t.Fatalf("tigerbeetle: %v", err)
+	}
+	defer lg.Close()
+
+	am := auth.NewManager(cfg.JWTSecret, cfg.AccessTTL, cfg.RefreshTTL)
+	nf := notify.New(st, cfg.Push)
+	srv := api.NewServer(cfg, st, lg, am, nf)
+	ts := httptest.NewServer(srv.Routes())
+	defer ts.Close()
+	c := &apiClient{t: t, base: ts.URL, http: ts.Client()}
+
+	uniq := time.Now().UnixNano()
+	idem := func(s string) string { return fmt.Sprintf("%s-%d", s, uniq) }
+
+	opEmail := fmt.Sprintf("fsparent-%d@example.com", uniq)
+	_, suBody := c.do(http.MethodPost, "/api/v1/auth/signup", "", map[string]string{
+		"household_name": "Flash Sale Household", "display_name": "Parent",
+		"email": opEmail, "password": "parentpass",
+	}, "")
+	opTok := suBody["access_token"].(string)
+
+	kidUser := fmt.Sprintf("fskid-%d", uniq)
+	_, cBody := c.do(http.MethodPost, "/api/v1/customers", opTok, map[string]string{
+		"type": "holder", "display_name": "Kiddo", "username": kidUser, "password": "kidpass",
+	}, idem("cust"))
+	acctID := cBody["account"].(map[string]any)["id"].(string)
+	kidTok := login(c, kidUser, "kidpass")
+
+	// Fund the account well ahead of the several redemption holds this test places.
+	if st1, b1 := c.do(http.MethodPost, "/api/v1/accounts/"+acctID+"/adjustments", opTok, map[string]any{
+		"direction": "credit", "amount": "5", "reason": "test funding",
+	}, idem("fund")); st1 != 201 {
+		t.Fatalf("fund account: %d %v", st1, b1)
+	}
+
+	// Before any sale exists, the active-sale endpoint reports none and full price.
+	if stA, aBody := c.do(http.MethodGet, "/api/v1/flash-sales/active", kidTok, nil, ""); stA != 200 {
+		t.Fatalf("active flash sale: %d %v", stA, aBody)
+	} else if aBody["active"] != false || int64(aBody["effective_price_minor"].(float64)) != 1000 {
+		t.Fatalf("expected no active sale and 1000 effective price, got %v", aBody)
+	}
+
+	// Holders cannot schedule flash sales (operator-only route).
+	if stF, _ := c.do(http.MethodPost, "/api/v1/flash-sales", kidTok, map[string]any{
+		"discount_type": "percent", "percent_off": 20, "ends_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+	}, idem("kid-flashsale")); stF != http.StatusForbidden {
+		t.Fatalf("expected 403 for holder-created flash sale, got %d", stF)
+	}
+
+	// Validation: out-of-range percent, an amount_off that isn't below a whole coin, and a bad window.
+	future := time.Now().Add(time.Hour).Format(time.RFC3339)
+	if stV, _ := c.do(http.MethodPost, "/api/v1/flash-sales", opTok, map[string]any{
+		"discount_type": "percent", "percent_off": 0, "ends_at": future,
+	}, idem("bad-pct")); stV != http.StatusBadRequest {
+		t.Fatalf("expected 400 for percent_off=0, got %d", stV)
+	}
+	if stV, _ := c.do(http.MethodPost, "/api/v1/flash-sales", opTok, map[string]any{
+		"discount_type": "fixed", "amount_off": "1", "ends_at": future,
+	}, idem("bad-fixed")); stV != http.StatusBadRequest {
+		t.Fatalf("expected 400 for amount_off >= 1 coin, got %d", stV)
+	}
+	if stV, _ := c.do(http.MethodPost, "/api/v1/flash-sales", opTok, map[string]any{
+		"discount_type": "percent", "percent_off": 20, "ends_at": time.Now().Add(-time.Hour).Format(time.RFC3339),
+	}, idem("bad-past")); stV != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a past ends_at, got %d", stV)
+	}
+
+	// Schedule a short-lived 20%-off sale, starting immediately.
+	shortEnds := time.Now().Add(1500 * time.Millisecond).Format(time.RFC3339)
+	stC1, saleBody := c.do(http.MethodPost, "/api/v1/flash-sales", opTok, map[string]any{
+		"discount_type": "percent", "percent_off": 20, "ends_at": shortEnds,
+	}, idem("sale-pct"))
+	if stC1 != 201 {
+		t.Fatalf("create percent flash sale: %d %v", stC1, saleBody)
+	}
+	saleID := saleBody["id"].(string)
+
+	// A second, overlapping sale is rejected.
+	if stO, oBody := c.do(http.MethodPost, "/api/v1/flash-sales", opTok, map[string]any{
+		"discount_type": "fixed", "amount_off": "0.10", "ends_at": shortEnds,
+	}, idem("sale-overlap")); stO != http.StatusConflict {
+		t.Fatalf("expected 409 for an overlapping flash sale, got %d %v", stO, oBody)
+	}
+
+	// Redeeming while the sale is active gets the discounted price.
+	stR1, rBody1 := c.do(http.MethodPost, "/api/v1/accounts/"+acctID+"/redemptions", kidTok, nil, idem("redeem-pct"))
+	if stR1 != 201 {
+		t.Fatalf("redeem during percent sale: %d %v", stR1, rBody1)
+	}
+	if got := int64(rBody1["amount_minor"].(float64)); got != 800 {
+		t.Fatalf("want 800 minor (20%% off 1000) during the sale, got %d", got)
+	}
+	if details, ok := rBody1["details"].(map[string]any); !ok || details["flash_sale_id"] != saleID {
+		t.Fatalf("redemption details should reference the active flash sale, got %v", rBody1["details"])
+	}
+
+	// Canceling the sale early reverts the price to normal immediately.
+	if stCancel, cancelBody := c.do(http.MethodPost, "/api/v1/flash-sales/"+saleID+"/cancel", opTok, nil, idem("cancel-pct")); stCancel != 200 {
+		t.Fatalf("cancel flash sale: %d %v", stCancel, cancelBody)
+	}
+	stR2, rBody2 := c.do(http.MethodPost, "/api/v1/accounts/"+acctID+"/redemptions", kidTok, nil, idem("redeem-after-cancel"))
+	if stR2 != 201 {
+		t.Fatalf("redeem after cancel: %d %v", stR2, rBody2)
+	}
+	if got := int64(rBody2["amount_minor"].(float64)); got != 1000 {
+		t.Fatalf("want full 1000 minor after canceling the sale, got %d", got)
+	}
+
+	// A canceled sale can no longer be canceled again.
+	if stC2, _ := c.do(http.MethodPost, "/api/v1/flash-sales/"+saleID+"/cancel", opTok, nil, idem("cancel-pct-again")); stC2 != http.StatusNotFound {
+		t.Fatalf("expected 404 re-canceling an already-canceled sale, got %d", stC2)
+	}
+
+	// Schedule a fixed-amount-off sale and let it run out naturally.
+	shortEnds2 := time.Now().Add(1500 * time.Millisecond).Format(time.RFC3339)
+	stC3, saleBody2 := c.do(http.MethodPost, "/api/v1/flash-sales", opTok, map[string]any{
+		"discount_type": "fixed", "amount_off": "0.30", "ends_at": shortEnds2,
+	}, idem("sale-fixed"))
+	if stC3 != 201 {
+		t.Fatalf("create fixed flash sale: %d %v", stC3, saleBody2)
+	}
+
+	stR3, rBody3 := c.do(http.MethodPost, "/api/v1/accounts/"+acctID+"/redemptions", kidTok, nil, idem("redeem-fixed"))
+	if stR3 != 201 {
+		t.Fatalf("redeem during fixed sale: %d %v", stR3, rBody3)
+	}
+	if got := int64(rBody3["amount_minor"].(float64)); got != 700 {
+		t.Fatalf("want 700 minor (0.30 off 1000) during the fixed sale, got %d", got)
+	}
+
+	time.Sleep(2 * time.Second)
+	if stA, aBody := c.do(http.MethodGet, "/api/v1/flash-sales/active", kidTok, nil, ""); stA != 200 {
+		t.Fatalf("active flash sale after expiry: %d %v", stA, aBody)
+	} else if aBody["active"] != false {
+		t.Fatalf("expected no active sale once the window elapsed, got %v", aBody)
+	}
+	stR4, rBody4 := c.do(http.MethodPost, "/api/v1/accounts/"+acctID+"/redemptions", kidTok, nil, idem("redeem-after-expiry"))
+	if stR4 != 201 {
+		t.Fatalf("redeem after sale expiry: %d %v", stR4, rBody4)
+	}
+	if got := int64(rBody4["amount_minor"].(float64)); got != 1000 {
+		t.Fatalf("want full 1000 minor once the sale window elapsed, got %d", got)
+	}
+}

@@ -2,7 +2,12 @@
 // (operators and holders), accounts, tasks, and transactions.
 package domain
 
-import "time"
+import (
+	"strconv"
+	"time"
+
+	"cpal/internal/money"
+)
 
 // Tenant is a household — the isolation boundary for a SaaS deployment. Every
 // customer, account, task, and transaction belongs to exactly one tenant, and
@@ -103,6 +108,60 @@ type Task struct {
 	ClaimedAt   *time.Time `json:"claimed_at,omitempty"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+type FlashSaleDiscountType string
+
+const (
+	FlashSalePercent FlashSaleDiscountType = "percent"
+	FlashSaleFixed   FlashSaleDiscountType = "fixed"
+)
+
+// FlashSale is an operator-configured, time-boxed discount on redemptions —
+// either a percentage or a fixed amount off the standard reward price.
+type FlashSale struct {
+	ID             string                 `json:"id"`
+	TenantID       string                 `json:"tenant_id"`
+	DiscountType   FlashSaleDiscountType  `json:"discount_type"`
+	PercentOff     *int                   `json:"percent_off,omitempty"`
+	AmountOffMinor *int64                 `json:"amount_off_minor,omitempty"`
+	StartsAt       time.Time              `json:"starts_at"`
+	EndsAt         time.Time              `json:"ends_at"`
+	CanceledAt     *time.Time             `json:"canceled_at,omitempty"`
+	CreatedBy      string                 `json:"created_by"`
+	CreatedAt      time.Time              `json:"created_at"`
+}
+
+// Apply returns the discounted price for baseMinor under this sale, floored
+// at 1 minor unit so a redemption can never become free or negative.
+func (fs FlashSale) Apply(baseMinor int64) int64 {
+	var discount int64
+	switch fs.DiscountType {
+	case FlashSalePercent:
+		if fs.PercentOff != nil {
+			discount = baseMinor * int64(*fs.PercentOff) / 100
+		}
+	case FlashSaleFixed:
+		if fs.AmountOffMinor != nil {
+			discount = *fs.AmountOffMinor
+		}
+	}
+	if effective := baseMinor - discount; effective >= 1 {
+		return effective
+	}
+	return 1
+}
+
+// Describe renders the discount in human terms, e.g. "20% off redemptions"
+// or "0.25 off redemptions".
+func (fs FlashSale) Describe() string {
+	if fs.DiscountType == FlashSalePercent && fs.PercentOff != nil {
+		return strconv.Itoa(*fs.PercentOff) + "% off redemptions"
+	}
+	if fs.AmountOffMinor != nil {
+		return money.Format(*fs.AmountOffMinor) + " off redemptions"
+	}
+	return "Redemptions are discounted"
 }
 
 type Transaction struct {
@@ -215,6 +274,7 @@ const (
 	NotifyBountyClaimed       NotificationType = "bounty.claimed"
 	NotifyBountyExpiringSoon  NotificationType = "bounty.expiring_soon"
 	NotifyBountyExpired       NotificationType = "bounty.expired"
+	NotifyFlashSaleStarted    NotificationType = "flash_sale.started"
 	NotifyStatementReady      NotificationType = "statement.ready"
 )
 

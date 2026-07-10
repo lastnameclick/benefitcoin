@@ -202,3 +202,30 @@ func (s *Service) SweepBounties(ctx context.Context) {
 		}
 	}
 }
+
+// SweepFlashSales runs one pass of the periodic flash sale sweep across
+// every active household: it notifies holders about a sale that was
+// scheduled ahead of time and whose window has now opened. Meant to be
+// called on a ticker from cmd/api's main loop.
+func (s *Service) SweepFlashSales(ctx context.Context) {
+	tenants, err := s.store.ListActiveTenants(ctx)
+	if err != nil {
+		log.Printf("notify: sweep: list tenants failed: %v", err)
+		return
+	}
+	for _, tenant := range tenants {
+		starting, err := s.store.ListFlashSalesStartingNow(ctx, tenant.ID)
+		if err != nil {
+			log.Printf("notify: sweep: list starting flash sales failed for tenant %s: %v", tenant.ID, err)
+			continue
+		}
+		for _, sale := range starting {
+			s.NotifyHolders(ctx, tenant.ID, domain.NotifyFlashSaleStarted,
+				"Flash sale!", sale.Describe()+" until "+sale.EndsAt.Local().Format("Jan 2 3:04 PM")+".",
+				map[string]any{"flash_sale_id": sale.ID})
+			if err := s.store.MarkFlashSaleStartNotified(ctx, tenant.ID, sale.ID); err != nil {
+				log.Printf("notify: sweep: mark notified failed for flash sale %s: %v", sale.ID, err)
+			}
+		}
+	}
+}

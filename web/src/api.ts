@@ -64,6 +64,24 @@ export interface Task {
   expires_at?: string;
 }
 
+export interface FlashSale {
+  id: string;
+  discount_type: "percent" | "fixed";
+  percent_off?: number;
+  amount_off_minor?: number;
+  starts_at: string;
+  ends_at: string;
+  canceled_at?: string;
+  created_at: string;
+}
+
+export interface ActiveFlashSale {
+  active: boolean;
+  flash_sale?: FlashSale;
+  base_price_minor: number;
+  effective_price_minor: number;
+}
+
 export type TxType = "earn" | "redeem" | "adjust_credit" | "adjust_debit";
 
 export interface Transaction {
@@ -319,6 +337,24 @@ export const api = {
     }),
   updateTask: (id: string, patch: Partial<{ name: string; description: string; value: string; active: boolean }>) =>
     request<Task>("PATCH", `/tasks/${id}`, patch),
+
+  getActiveFlashSale: () => request<ActiveFlashSale>("GET", "/flash-sales/active"),
+  listFlashSales: () => request<{ flash_sales: FlashSale[] }>("GET", "/flash-sales"),
+  createFlashSale: (input: {
+    discountType: "percent" | "fixed";
+    percentOff?: number;
+    amountOff?: string;
+    startsAt?: string;
+    endsAt: string;
+  }) =>
+    request<FlashSale>("POST", "/flash-sales", {
+      discount_type: input.discountType,
+      percent_off: input.percentOff,
+      amount_off: input.amountOff,
+      starts_at: input.startsAt || undefined,
+      ends_at: input.endsAt,
+    }),
+  cancelFlashSale: (id: string) => request<{ id: string; canceled: boolean }>("POST", `/flash-sales/${id}/cancel`, {}),
 
   submitEarning: (accountId: string, taskId: string) =>
     request<Transaction>("POST", `/accounts/${accountId}/earnings`, { task_id: taskId }),

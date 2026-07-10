@@ -150,6 +150,9 @@ func (s *Server) Routes() http.Handler {
 			// Tasks (holders read active; operators manage).
 			r.Get("/tasks", s.handleListTasks)
 
+			// Flash sales (holders read the currently active one; operators manage).
+			r.Get("/flash-sales/active", s.handleGetActiveFlashSale)
+
 			// Operator-only.
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireRole(domain.RoleOperator, writeErr))
@@ -159,6 +162,9 @@ func (s *Server) Routes() http.Handler {
 				r.Post("/accounts/{id}/adjustments", s.handleCreateAdjustment)
 				r.Post("/tasks", s.handleCreateTask)
 				r.Patch("/tasks/{id}", s.handleUpdateTask)
+				r.Get("/flash-sales", s.handleListFlashSales)
+				r.Post("/flash-sales", s.handleCreateFlashSale)
+				r.Post("/flash-sales/{id}/cancel", s.handleCancelFlashSale)
 				r.Get("/transactions", s.handleListTransactions)
 				r.Post("/transactions/{id}/settle", s.handleSettle)
 				r.Post("/transactions/{id}/void", s.handleVoid)

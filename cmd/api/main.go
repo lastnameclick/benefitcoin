@@ -64,9 +64,11 @@ func run() error {
 	}
 	srv := api.NewServer(cfg, st, lg, am, nf)
 
-	// Periodic bounty sweep: warns holders about bounties expiring soon and
-	// retires (with a notification) any that already expired. Runs in-process
-	// since there's no separate job runner for anything this frequent.
+	// Periodic sweeps: warn holders about bounties expiring soon and retire
+	// (with a notification) any that already expired; notify holders about
+	// flash sales scheduled ahead of time once their window opens. Runs
+	// in-process since there's no separate job runner for anything this
+	// frequent.
 	go func() {
 		ticker := time.NewTicker(bountySweepInterval)
 		defer ticker.Stop()
@@ -76,6 +78,7 @@ func run() error {
 				return
 			case <-ticker.C:
 				nf.SweepBounties(ctx)
+				nf.SweepFlashSales(ctx)
 			}
 		}
 	}()

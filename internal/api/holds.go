@@ -220,7 +220,8 @@ func (s *Server) handleAdjustTransaction(w http.ResponseWriter, r *http.Request)
 }
 
 // handleCreateRedemption lets a holder request to spend one whole coin on a
-// reward. The hold reserves the funds; an operator settles to complete the spend.
+// reward, or the discounted price if a flash sale is currently active. The
+// hold reserves the funds; an operator settles to complete the spend.
 func (s *Server) handleCreateRedemption(w http.ResponseWriter, r *http.Request) {
 	actor, _ := auth.FromContext(r.Context())
 	acct, ok := s.loadAccountAuthorized(w, r)
@@ -231,7 +232,18 @@ func (s *Server) handleCreateRedemption(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	amount := money.Coin(1) // generic 1-coin reward
+	base := money.Coin(1) // generic 1-coin reward
+	amount := base
+	memo := "Reward redemption"
+	var details map[string]any
+	if sale, err := s.store.GetActiveFlashSale(r.Context(), actor.TenantID); err == nil {
+		amount = sale.Apply(base)
+		memo = "Reward redemption (flash sale)"
+		details = map[string]any{"base_minor": base, "flash_sale_id": sale.ID, "discount_minor": base - amount}
+	} else if err != store.ErrNotFound {
+		writeErr(w, http.StatusInternalServerError, "internal", "failed to check for a flash sale")
+		return
+	}
 
 	pendingID, err := s.ledger.RedeemHold(acct.TBAccountID, tenant.RedemptionTBID, amount)
 	if errors.Is(err, ledger.ErrInsufficientFunds) {
@@ -244,7 +256,7 @@ func (s *Server) handleCreateRedemption(w http.ResponseWriter, r *http.Request) 
 	tx := &domain.Transaction{
 		ID: uuid.NewString(), TenantID: actor.TenantID, Type: domain.TxRedeem, Status: domain.TxPending,
 		AccountID: acct.ID, GLAccountID: tenant.RedemptionAccountID, AmountMinor: amount,
-		Memo: "Reward redemption", TBPendingTransferID: pendingID, CreatedBy: actor.IdentityID,
+		Memo: memo, TBPendingTransferID: pendingID, CreatedBy: actor.IdentityID, Details: details,
 	}
 	if err := s.store.CreateTransaction(r.Context(), tx); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "failed to record transaction")
