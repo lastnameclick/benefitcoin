@@ -306,7 +306,11 @@ export function AccountCharts({ accountId }: { accountId: string }) {
         setBalance(b.points ?? []);
         setEarnRedeem(e.buckets ?? []);
         setLeaderboard(l.entries ?? []);
-        setFreq(f);
+        setFreq({
+          by_hour: f.by_hour ?? [],
+          by_weekday: f.by_weekday ?? [],
+          by_month: f.by_month ?? [],
+        });
       })
       .catch((e) => alive && setErr(e instanceof ApiError ? e.message : String(e)));
     return () => {
