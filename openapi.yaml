@@ -203,7 +203,7 @@ paths:
         "400": { description: Task inactive }
   /accounts/{id}/redemptions:
     post:
-      summary: Holder requests a 1-coin reward → redeem hold
+      summary: Holder requests a reward → redeem hold (1 coin, or the discounted flash-sale price if one is active)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
         - { $ref: "#/components/parameters/IdempotencyKey" }
@@ -271,6 +271,58 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string } }
         - { $ref: "#/components/parameters/IdempotencyKey" }
       responses: { "200": { description: Updated task } }
+  /flash-sales/active:
+    get:
+      summary: The currently active flash sale, if any, and the resulting redemption price
+      responses: { "200": { description: Active flash sale (or none) } }
+  /flash-sales:
+    get:
+      summary: List every flash sale ever scheduled for the household (operator only)
+      responses: { "200": { description: Flash sales } }
+    post:
+      summary: Schedule a flash sale (operator only)
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [discount_type, ends_at]
+              properties:
+                discount_type: { type: string, enum: [percent, fixed] }
+                percent_off:
+                  {
+                    type: integer,
+                    description: "1-99; required when discount_type is percent",
+                  }
+                amount_off:
+                  {
+                    type: string,
+                    description: 'coin amount below 1, e.g. "0.25"; required when discount_type is fixed',
+                  }
+                starts_at:
+                  {
+                    type: string,
+                    description: "when the sale begins (YYYY-MM-DD or RFC3339); blank means immediately",
+                  }
+                ends_at:
+                  {
+                    type: string,
+                    description: "when the sale ends (YYYY-MM-DD or RFC3339)",
+                  }
+      responses:
+        "201": { description: Created flash sale }
+        "409": { description: Overlaps an existing scheduled or active flash sale }
+  /flash-sales/{id}/cancel:
+    post:
+      summary: End a scheduled or active flash sale early (operator only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: Canceled }
+        "404": { description: Not found, already ended, or already canceled }
   /transactions:
     get:
       summary: List/work-queue transactions (operator only)

@@ -13,6 +13,7 @@ import {
   type Account,
   type AuditEvent,
   type Customer,
+  type FlashSale,
   type Task,
   type Transaction,
 } from "../api";
@@ -124,6 +125,13 @@ export default function OperatorConsole() {
       icon: <IconList />,
       hint: "The earning catalog",
       render: () => <Chores />,
+    },
+    {
+      key: "flash-sales",
+      label: "Flash sales",
+      icon: <IconZap />,
+      hint: "Time-boxed discounts on redemptions",
+      render: () => <FlashSales />,
     },
     {
       key: "audit",
@@ -997,6 +1005,188 @@ function Chores() {
           <Notice msg={bountyMsg} err={bountyErr} />
           <button className="btn-primary">
             <IconZap width={16} height={16} /> Post bounty
+          </button>
+        </form>
+      </Panel>
+    </div>
+  );
+}
+
+function flashSaleStatus(fs: FlashSale, now: Date): "canceled" | "ended" | "scheduled" | "active" {
+  if (fs.canceled_at) return "canceled";
+  if (new Date(fs.ends_at) <= now) return "ended";
+  if (new Date(fs.starts_at) > now) return "scheduled";
+  return "active";
+}
+
+function flashSaleDescription(fs: FlashSale): string {
+  return fs.discount_type === "percent"
+    ? `${fs.percent_off}% off`
+    : `${coins(fs.amount_off_minor ?? 0)} off`;
+}
+
+function FlashSales() {
+  const b = useBranding();
+  const [sales, setSales] = useState<FlashSale[]>([]);
+  const { err, run } = useError();
+  const [form, setForm] = useState({
+    discountType: "percent" as "percent" | "fixed",
+    percentOff: "",
+    amountOff: "",
+    startsAt: "",
+    endsAt: "",
+  });
+
+  const load = useCallback(async () => {
+    const { flash_sales } = await api.listFlashSales();
+    setSales(flash_sales ?? []);
+  }, []);
+  useEffect(() => {
+    load().catch(() => {});
+  }, [load]);
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    run(
+      () =>
+        api.createFlashSale({
+          discountType: form.discountType,
+          percentOff: form.discountType === "percent" ? Number(form.percentOff) : undefined,
+          amountOff: form.discountType === "fixed" ? form.amountOff : undefined,
+          startsAt: form.startsAt ? new Date(form.startsAt).toISOString() : undefined,
+          endsAt: new Date(form.endsAt).toISOString(),
+        }),
+      () => {
+        setForm({ discountType: "percent", percentOff: "", amountOff: "", startsAt: "", endsAt: "" });
+        load();
+      },
+    );
+  };
+
+  const now = new Date();
+
+  return (
+    <div className="grid-2">
+      <Panel
+        className="span-2"
+        title="Flash sales"
+        sub="Scheduled, active, and past discounts on redemptions."
+      >
+        {sales.length === 0 ? (
+          <Empty title="No flash sales yet." hint="Schedule one below." />
+        ) : (
+          <ul className="rows">
+            {sales.map((fs) => {
+              const status = flashSaleStatus(fs, now);
+              const cancelable = status === "scheduled" || status === "active";
+              return (
+                <li key={fs.id} className="row">
+                  <div>
+                    <div className="row-title">
+                      {flashSaleDescription(fs)} redemptions{" "}
+                      <span className={`chip ${status === "active" ? "chip-bounty" : status === "canceled" ? "chip-off" : ""}`}>
+                        {status}
+                      </span>
+                    </div>
+                    <div className="row-sub">
+                      {new Date(fs.starts_at).toLocaleString()} – {new Date(fs.ends_at).toLocaleString()}
+                    </div>
+                  </div>
+                  {cancelable && (
+                    <div className="row-right">
+                      <button
+                        className="btn-ghost sm"
+                        onClick={() => run(() => api.cancelFlashSale(fs.id), load)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Panel>
+      <Panel
+        title="Schedule a flash sale"
+        sub={`Redemptions normally cost 1 ${b.coin_name}.`}
+      >
+        <form onSubmit={submit} className="form">
+          <label className="field">
+            Discount type
+            <select
+              value={form.discountType}
+              onChange={(e) => setForm({ ...form, discountType: e.target.value as "percent" | "fixed" })}
+            >
+              <option value="percent">Percent off</option>
+              <option value="fixed">Fixed amount off</option>
+            </select>
+          </label>
+          {form.discountType === "percent" ? (
+            <label className="field">
+              Percent off (1-99)
+              <input
+                type="number"
+                min={1}
+                max={99}
+                value={form.percentOff}
+                onChange={(e) => setForm({ ...form, percentOff: e.target.value })}
+              />
+            </label>
+          ) : (
+            <label className="field">
+              Amount off ({b.coin_name_plural}, e.g. 0.25)
+              <input
+                value={form.amountOff}
+                onChange={(e) => setForm({ ...form, amountOff: e.target.value })}
+              />
+            </label>
+          )}
+          <label className="field">
+            Starts <span className="field-opt">optional — leave blank to start immediately</span>
+            <input
+              type="datetime-local"
+              value={form.startsAt}
+              onChange={(e) => setForm({ ...form, startsAt: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            Ends
+            <input
+              type="datetime-local"
+              value={form.endsAt}
+              onChange={(e) => setForm({ ...form, endsAt: e.target.value })}
+            />
+          </label>
+          <div className="quick-dates">
+            <button
+              type="button"
+              className="btn-ghost sm"
+              onClick={() =>
+                setForm({ ...form, endsAt: datetimeLocal(new Date(Date.now() + 2 * 60 * 60 * 1000)) })
+              }
+            >
+              Within 2 hours
+            </button>
+            <button
+              type="button"
+              className="btn-ghost sm"
+              onClick={() => setForm({ ...form, endsAt: datetimeLocal(endOfDay(new Date())) })}
+            >
+              End of day today
+            </button>
+            <button
+              type="button"
+              className="btn-ghost sm"
+              onClick={() => setForm({ ...form, endsAt: datetimeLocal(endOfWeek(new Date())) })}
+            >
+              This week
+            </button>
+          </div>
+          <Notice err={err} />
+          <button className="btn-primary">
+            <IconZap width={16} height={16} /> Start flash sale
           </button>
         </form>
       </Panel>

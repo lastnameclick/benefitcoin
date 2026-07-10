@@ -7,7 +7,9 @@ import {
 import {
   api,
   ApiError,
+  coins,
   type Account,
+  type ActiveFlashSale,
   type Task,
   type Transaction,
 } from "../api";
@@ -40,19 +42,22 @@ export default function HolderPortal() {
   const [account, setAccount] = useState<Account | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [txs, setTxs] = useState<Transaction[]>([]);
+  const [flashSale, setFlashSale] = useState<ActiveFlashSale | null>(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
 
   const bountyCount = tasks.filter((t) => t.is_bounty && t.active && !t.claimed_by).length;
 
   const load = useCallback(async () => {
-    const [{ accounts }, { tasks }] = await Promise.all([
+    const [{ accounts }, { tasks }, sale] = await Promise.all([
       api.listAccounts(),
       api.listTasks(),
+      api.getActiveFlashSale(),
     ]);
     const acct = accounts[0] ?? null;
     setAccount(acct);
     setTasks(tasks ?? []);
+    setFlashSale(sale);
     if (acct) {
       const { transactions } = await api.accountTransactions(acct.id);
       setTxs(transactions ?? []);
@@ -100,6 +105,7 @@ export default function HolderPortal() {
           msg={msg}
           err={err}
           nameFor={nameFor}
+          flashSale={flashSale}
           onRedeem={() =>
             act(
               () => api.requestRedemption(account!.id),
@@ -194,6 +200,7 @@ function Overview({
   err,
   onRedeem,
   nameFor,
+  flashSale,
 }: {
   account: Account | null;
   txs: Transaction[];
@@ -201,6 +208,7 @@ function Overview({
   err: string;
   onRedeem: () => void;
   nameFor: () => string;
+  flashSale: ActiveFlashSale | null;
 }) {
   const b = useBranding();
   if (!account)
@@ -214,7 +222,9 @@ function Overview({
     );
 
   const bal = account.balance;
-  const canRedeem = (bal?.available_minor ?? 0) >= 1000;
+  const sale = flashSale?.active ? flashSale.flash_sale : undefined;
+  const price = flashSale?.effective_price_minor ?? 1000;
+  const canRedeem = (bal?.available_minor ?? 0) >= price;
 
   return (
     <div className="grid-2">
@@ -229,14 +239,23 @@ function Overview({
           >
             {canRedeem ? (
               <>
-                Redeem a reward — 1.00 <IconArrowRight width={16} height={16} />
+                Redeem a reward — {coins(price)} <IconArrowRight width={16} height={16} />
               </>
             ) : (
-              `Save 1 ${b.coin_name} to redeem`
+              `Save ${coins(price)} ${b.coin_name} to redeem`
             )}
           </button>
         }
       >
+        {sale && (
+          <div className="row-sub">
+            <IconZap width={15} height={15} className="bounty-icon" />{" "}
+            <span className="chip chip-bounty">
+              Flash sale: {sale.discount_type === "percent" ? `${sale.percent_off}% off` : `${coins(sale.amount_off_minor ?? 0)} off`}
+            </span>{" "}
+            ends {relativeTime(sale.ends_at)}
+          </div>
+        )}
         <BalanceTiles balance={bal} />
         <Notice msg={msg} err={err} />
       </Panel>
